@@ -1,0 +1,30 @@
+# Ignore build artifacts
+/build/
+
+# Common compiled object and binary files
+*.o
+*.out
+*.exe
+*.a
+*.so
+
+# CUDA compiler output
+*.ptx
+*.cubin
+*.fatbin
+
+# Logs and profiling output
+*.log
+*.nvvp
+*.qdrep
+*.sqlite
+
+# OS-specific clutter
+.DS_Store
+Thumbs.db
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*~
