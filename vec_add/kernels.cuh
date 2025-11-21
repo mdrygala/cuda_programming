@@ -1,7 +1,9 @@
 #pragma once
 
 // used by Instruction-Level Parallelism (ILP) kernel (each thread handles UNROLL elems per step)
+#ifndef UNROLL
 #define UNROLL 4
+#endif
 
 // Vector addition with baseline kernel
 __global__ void vecAddBaseline(const int* __restrict__ A,

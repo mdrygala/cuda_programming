@@ -64,7 +64,7 @@ Reported times are best-of runs; bandwidth (BW) is an estimation effective globa
 
 CUDA programs can be limited by several common bottlenecks:
 
-1. Amdahl’s Law (serial fraction)  
+1. Amdahl’s Law 
 2. Communication overhead  
 3. Synchronization  
 4. Load imbalance  
