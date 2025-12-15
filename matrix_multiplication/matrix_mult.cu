@@ -71,6 +71,52 @@ static inline void sgemm_rowmajor(cublasHandle_t h,
                 /*C=*/C, /*ldc=*/N);
 }
 
+void computeWarpTiling(
+    int TILE, int SUB, int numWarps,
+    int &warpDimRows, int &warpDimCols,
+    int &warpSubRows, int &warpSubCols)
+{
+    // warpSubRows * warpSubCols = 32  (in microtiles)
+    // Each microtile = SUB x SUB
+    // warpDimRows * (warpSubRows * SUB) = TILE
+    // warpDimCols * (warpSubCols * SUB) = TILE
+
+    bool found = false;
+
+    for (int a = 1; a <= 32; a++) {
+        if (32 % a != 0) continue;
+        int b = 32 / a;  // so a*b = 32
+
+        int warpTileH = a * SUB;
+        int warpTileW = b * SUB;
+
+        // must tile the block tile exactly
+        if (TILE % warpTileH != 0) continue;
+        if (TILE % warpTileW != 0) continue;
+
+        int wr = TILE / warpTileH;
+        int wc = TILE / warpTileW;
+
+        if (wr * wc != numWarps) continue;
+
+        // good configuration -> save it
+        warpDimRows = wr;
+        warpDimCols = wc;
+        warpSubRows = a;
+        warpSubCols = b;
+        found = true;
+        break;
+    }
+
+    if (!found) {
+        printf("No valid warp tiling for TILE=%d SUB=%d numWarps=%d\n",
+               TILE, SUB, numWarps);
+    }
+}
+
+
+
+
 
 int main(){
     if ((SUBTILE % SUB) != 0) {
@@ -109,6 +155,19 @@ int main(){
     // Initialize input vectors
     initializeMatrices(A, B, Cinit, M, N, K);
 
+
+
+    int numWarps = (SUBTILE/SUB * SUBTILE/SUB) / 32;
+
+    int warpDimRows, warpDimCols;
+    int warpSubRows, warpSubCols;
+
+    computeWarpTile(SUBTILE, SUB, numWarps,
+                    warpDimRows, warpDimCols,
+                    warpSubRows, warpSubCols);
+
+    std::cout << "Warp tile: " << WARP_M << "x" << WARP_N << "\n";
+
     dim3 block(TILE, TILE);
     dim3 grid((N + TILE- 1) / TILE, (M + TILE- 1) / TILE);
 
@@ -140,6 +199,7 @@ int main(){
     // run subtile kernel
     dim3 blockSub(SUBTILE/SUB, SUBTILE/SUB);
     dim3 gridSub((N + SUBTILE- 1) / SUBTILE, (M + SUBTILE- 1) / SUBTILE);
+    
 
     auto launch_reset_subtiling_naive = [&](){
         cudaMemcpyAsync(C, Cinit, CBytes, cudaMemcpyDeviceToDevice);
@@ -170,6 +230,9 @@ int main(){
     
     ms = bench_best_ms(launch_reset_subtiling_swizzle);
     printf("Kernel time for Register Sub Tiling (Vectorized Loading Swizzle) : %.3f ms  |  %.2f GFLOP/s\n", ms, gflops_total / (ms / 1e3));
+
+
+
 
 
     cublasHandle_t h = make_cublas();

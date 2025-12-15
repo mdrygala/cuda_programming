@@ -117,6 +117,114 @@ __global__ void GEMMSubTiling(int M, int N, int K,
 
 
 
+// GEMM with Warp SubTiling
+// template <typename LoaderFunc, typename ComputeFunc>
+// __global__ void GEMMWarpTiling(int M, int N, int K,
+//                            float alpha,
+//                            const float* __restrict__ A,  // (M x K)
+//                            const float* __restrict__ B,  // (K x N)
+//                            float beta,
+//                            float* __restrict__ C,
+//                            int warpDimRows, int warpDimCols,
+//                            int warpSubRows, int warpSubCols)
+                        
+
+// {
+//     __shared__ float ATile[SUBTILE][SUBTILE+1]; // Padding to avoid bank conflicts
+//     __shared__ float BTile[SUBTILE][SUBTILE+1];
+
+
+
+//     // Grid-wide stride
+//     int strideRow = SUBTILE * gridDim.y;
+//     int strideCol = SUBTILE * gridDim.x;
+
+//     //Thread row and column within origin within the tile
+//     int threadRowTileLoad = threadIdx.y * SUB;
+//     int threadColTileLoad = threadIdx.x * SUB;
+
+//     //Thread row and column within origin within the Warp-tile
+//     int linearThreadIdx = threadIdx.y * blockDim.x + threadIdx.x;
+//     int warpIdx = linearThreadIdx / 32;   // 32 threads per warp
+//     int laneId = linearThreadIdx & 31; // lane index within the warp 
+
+//     int warpRowIdx = warpIdx / warpDimCols;
+//     int warpColIdx = warpIdx % warpDimCols;
+
+//     int warpTileRow = warpRowIdx * warpSubRows;
+//     int warpTileCol = warpColIdx * warpSubCols;
+
+//     int threadTileRowInWarp = laneId / warpThreadCols;
+//     int threadTileColInWarp = laneId % warpThreadCols;
+
+//     int threadTileRowCompute = warpTileRow + threadTileRowInWarp * SUB;   
+//     int threadColRowCompute = warpTileCol + threadTileColInWarp * SUB;
+
+
+//     //Loop over all origin rows and columns that a given block is responsible for
+//     for (int startRow = blockIdx.y * SUBTILE; startRow < M; startRow += strideRow) {
+//         for (int startCol = blockIdx.x * SUBTILE; startCol < N; startCol += strideCol){
+
+//             int threadRowGlobalOrigin = startRow + threadRowTile;
+//             int threadColGlobalOrigin = startCol + threadColTile;
+
+//             float sum[SUB][SUB];
+            
+//             #pragma unroll
+//             for (int i = 0; i < SUB; i++){
+//                 #pragma unroll
+//                 for (int j = 0; j < SUB; j++){
+//                     sum[i][j] = 0.0f;
+//                 }
+//             }
+
+
+//             for (int chunk = 0; chunk < K; chunk += SUBTILE){
+//                 int threadRowGlobalOriginA = threadRowGlobalOrigin;
+//                 int threadColGlobalOriginA = threadColTile + chunk;
+
+//                 int threadRowGlobalOriginB = threadRowTile + chunk;
+//                 int threadColGlobalOriginB = threadColGlobalOrigin;
+//                 //First load into shared memory
+
+//                 LoaderFunc::run(A, ATile, B, BTile, M, K, N,
+//                                 startRow,  startCol, chunk,
+//                                 threadRowTileLoad, threadColTileLoad,
+//                                 threadRowGlobalOriginA, threadColGlobalOriginA,
+//                                 threadRowGlobalOriginB, threadColGlobalOriginB);
+//                  __syncthreads();
+
+                
+//                 // Continue accumulation
+//                 int kmax = min(SUBTILE, K-chunk);
+//                 ComputeFunc::run(ATile, BTile, K, kmax,
+//                                 sum, threadWarpRowTileCompute, threadWarpColTileCompute);
+
+       
+//                 __syncthreads();
+//             }
+//         //Write back to memory
+//             #pragma unroll
+//             for (int i = 0; i < SUB; i++){
+//                 int threadRowGlobal = threadRowGlobalOrigin + i;
+//                 if (threadRowGlobal >= M) break;
+//                 #pragma unroll
+//                 for (int j = 0; j < SUB; j++){
+//                     int threadColGlobal = threadColGlobalOrigin + j;
+//                     if (threadColGlobal >= N) break;
+//                         int idx = threadRowGlobal * N + threadColGlobal;
+//                         float COld = (beta != 0.0f) ? C[idx] : 0.0f;
+//                         C[idx] = alpha * sum[i][j] + beta *COld;
+                    
+//                 }
+       
+//             }
+//         }
+//     }
+// }
+
+
+
 
 
 
@@ -371,10 +479,35 @@ void compute_subtile_swizzle(const float ATile[SUBTILE][SUBTILE+1],
 // void compute_subtile_swizzle_warp(const float ATile[SUBTILE][SUBTILE+1],
 //                      const float BTile[SUBTILE][SUBTILE+1],
 //                      int K, int kmax,
-//                      float sum[SUB][SUB], int threadRowTile, int threadColTile)
+//                      float sum[SUB][SUB], int threadRowWarpTile, int threadColWarpTile,
+//                      int warpDimRows, int warpDimCols,
+//                      int warpSubRows, int warpSubCols)
 
-// {
+// {   
+//     #pragma unroll
+//     for (int k = 0; k < kmax; k++){ 
+//         float AReg[SUB];
+//         float BReg[SUB];
+//         #pragma unroll
+//         for (int i=0; i < SUB; i++){
+//             AReg[i] = ATile[threadRowTile + i][k];
+//         }
+//         int colSwz = (k & 1)<<1; 
+//         #pragma unroll
+//         for (int j=0; j < SUB; j++){
+//             BReg[j] = BTile[k][(threadColTile + j) ^ colSwz];
+//         }
 
+//         #pragma unroll
+//         for (int i = 0; i < SUB; i++){
+//             #pragma unroll
+//             for (int j = 0; j < SUB; j++){
+//                 sum[i][j] = fmaf(AReg[i], BReg[j], sum[i][j]);
+//             }
+
+//         }
+
+//     }
 // }
 
 
