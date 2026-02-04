@@ -1,6 +1,6 @@
 #pragma once
 #include <cuda_runtime.h>
-#include "gemm_config.h"
+#include "config.h"
 
 // Non-templated kernels (decl only)
 __global__ void GEMMBaseline(int M,int N,int K,

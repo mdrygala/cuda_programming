@@ -1,7 +1,7 @@
 #include <cuda_runtime.h>
-#include "gemm_config.h"
-#include "gemm_loaders.cuh"
-#include "gemm_compute.cuh"
+#include "config.h"
+#include "load_helpers.cuh"
+#include "compute_helpers.cuh"
 #include "kernels.cuh"          // include declarations
 
 // -------------------- Baseline --------------------
@@ -77,7 +77,7 @@ __global__ void GEMMTiling(int M, int N, int K,
 
 // -------------------- Subtiling template (definition stays in .cu) --------------------
 template <typename LoaderFunc, typename ComputeFunc>
-__global__ void GEMMSubTiling(int M, int N, int K,
+__device__ __forceinline__ void GEMMSubTiling(int M, int N, int K,
                               float alpha,
                               const float* __restrict__ A,
                               const float* __restrict__ B,

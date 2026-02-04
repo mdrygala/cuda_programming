@@ -1,6 +1,6 @@
 #pragma once
 #include <cuda_runtime.h>
-#include "gemm_config.h"
+#include "config.h"
 
 __device__ __forceinline__
 void load_subtile_naive(const float* __restrict__ A,

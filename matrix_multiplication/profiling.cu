@@ -7,7 +7,7 @@
 #include <cassert>
 #include <cmath>
 
-#include "gemm_config.h"
+#include "config.h"
 #include "kernels.cuh"
 
 
@@ -48,7 +48,7 @@ int main() {
 
     
     // ---------- choose what to profile (change ONE line) ----------
-    auto Kernel = GEMMSubtileFinal;   // GEMMBaseline, GEMMTiling, or GEMMSubtileFinal
+    auto Kernel = GEMMBaseline;   // GEMMBaseline, GEMMTiling, or GEMMSubtileFinal
 
     // ---------- basic config sanity ----------
     assert(SUBTILE % SUB == 0);

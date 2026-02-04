@@ -1,7 +1,7 @@
 
 #pragma once
 #include <cuda_runtime.h>
-#include "gemm_config.h"
+#include "config.h"
 
 __device__ __forceinline__
 void compute_subtile_naive(const float ATile[SUBTILE][SUBTILE+1],
