@@ -1,7 +1,8 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>        // for __half
 #include <cuda_bf16.h>        // for __nv_bfloat16
-
+#include <vector>
+using namespace std
 
 //B4
 __global__ void reduceSum(const float* a, float* out, int N) {
@@ -147,3 +148,54 @@ __global void MPGEMMNaive(const __half* __restrict__ A, const __half* __restrict
      
 
      }
+
+
+     __global__ void dot(const __half* A,
+                    const __half* B,
+                    float* out,
+                    int N) {
+    
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    float sum = 0.0f;
+    for (int i=tid; i<N; i+= stride){
+        sum += __half2float(A[i]) * __half2float(B[i]);
+    }
+
+    atomicAdd(out, sum);
+}
+
+void run_fp16_dot(const vector<float>& hA,
+                  const vector<float>& hB,
+                  int N){
+
+//convert host data
+vector<__half> hA_half(N), hB_half(N);
+for (int i=0; i< N; i++){
+    hA_half[i] = __half(hA[i]);
+    hB_half[i] = __half(hB[i]);
+}
+
+__half *dA, *dB, *dout;
+
+cudaMalloc(&dA, sizeof(__half)*N);
+cudaMalloc(&dB, sizeof(__half)*N);
+cudaMalloc(&dout, sizeof(float));
+
+cudaMemcpy(dA, hA_half.data(), sizeof(__half)*N, cudaMemcpyHostToDevice);
+cudaMemcpy(dB, hB_half.data(), sizeof(__half)*N, cudaMemcpyHostToDevice);
+cudaMemset(dout, 0, sizeof(float));
+
+float* out = n
+
+dot<<<1024, 256>>>(dA, dB)
+
+
+float hout;
+cudaMemcpy(&hout, dout, sizeof(float), cudaMemcpyDeviceToHost);
+cudaFree(dA);
+cudaFree(dB);
+cudaFree(dout);
+}
+/// otherwise replace __half with __nv_bfloat16

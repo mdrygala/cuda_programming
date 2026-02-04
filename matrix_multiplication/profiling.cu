@@ -1,70 +1,158 @@
 #include <cuda_runtime.h>
-#include "kernels.cuh"
+#include <cuda_profiler_api.h>
+
 #include <vector>
 #include <cstdio>
-using namespace std;
+#include <cstdlib>
+#include <cassert>
+#include <cmath>
 
-
-int main(){
-
-    int N = 1 << 13;
-    int K = N;
-    int M = N;
-
-    float *hA, *hB, *hC;
-    float *dA, *dB, *dC;
-
-    vector<float> A = vector<float>(M*K, 1.0f);
-    vector<float> B = vector<float>(K*N, 1.0f);
-    vector<float> C = vector<float>(M*N, 0.0f);
-    hA = A.data();
-    hB = B.data();
-
-    hC = C.data();
-
-    cudaMalloc(&dA, sizeof(float)*M*K);
-    cudaMalloc(&dB, sizeof(float)*K*N);
-    cudaMalloc(&dC, sizeof(float)*M*N);
-    cudaMemcpy(dA, hA, sizeof(float)*M*K, cudaMemcpyHostToDevice);
-    cudaMemcpy(dB, hB, sizeof(float)*K*N, cudaMemcpyHostToDevice);
-    cudaMemcpy(dC, hC, sizeof(float)*M*N, cudaMemcpyHostToDevice);
-
-    int blockWidth = 32;
-    int gridHeight = (M + blockWidth -1)/blockWidth;
-    int gridWidth = (N + blockWidth -1)/blockWidth;
-
-    dim3 gridSize(gridWidth, gridHeight);
-    dim3 blockSize(blockWidth, blockWidth);
-
-        // --- Query kernel attributes ---
-    cudaFuncAttributes attr;
-    cudaFuncGetAttributes(&attr, GEMMTiling);
-
-    printf("Kernel attributes:\n");
-    printf("  Registers per thread: %d\n", attr.numRegs);
-    printf("  Static shared memory per block: %zu bytes\n", attr.sharedSizeBytes);
-    printf("  Constant memory: %zu bytes\n", attr.constSizeBytes);
-    printf("  Local memory per thread: %zu bytes\n", attr.localSizeBytes);
-        int maxBlocksPerSM;
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &maxBlocksPerSM,
-        GEMMBaseline,
-        blockWidth * blockWidth,
-        0   // dynamic shared memory (change if you use it)
-    );
-
-    printf("Occupancy estimate:\n");
-    printf("  Max active blocks per SM: %d\n", maxBlocksPerSM);
+#include "gemm_config.h"
+#include "kernels.cuh"
 
 
 
-    GEMMTiling<<<gridSize, blockSize>>>(M, N, K, 1.0f, dA, dB, 1.0f, dC);
+#define CHECK_CUDA(call) do {                                   \
+  cudaError_t err = (call);                                     \
+  if (err != cudaSuccess) {                                     \
+    fprintf(stderr, "CUDA error %s:%d: %s\n",                    \
+            __FILE__, __LINE__, cudaGetErrorString(err));        \
+    std::exit(1);                                               \
+  }                                                             \
+} while(0)
 
-    cudaDeviceSynchronize();
-    cudaMemcpy(hC, dC, sizeof(float)* M * N, cudaMemcpyDeviceToHost);
+static void verifyGEMM_small(const float *A, const float *B,
+                             const float *Cgpu, const float *Cinit,
+                             int M, int N, int K, float alpha, float beta)
+{
+    const float atol = 1e-2f, rtol = 1e-2f;
+    for (int i = 0; i < M; i++) {
+        for (int j = 0; j < N; j++) {
+            float ref = 0.0f;
+            for (int k = 0; k < K; k++) ref += A[i*K + k] * B[k*N + j];
+            ref = alpha * ref + beta * Cinit[i*N + j];
 
-    cudaFree(dA);
-    cudaFree(dB);
-    cudaFree(dC);
+            float diff = std::fabs(Cgpu[i*N + j] - ref);
+            float tol  = atol + rtol * std::fabs(ref);
+            if (diff > tol) {
+                fprintf(stderr,
+                        "Mismatch (%d,%d): gpu=%f ref=%f diff=%f tol=%f\n",
+                        i, j, Cgpu[i*N+j], ref, diff, tol);
+                std::exit(2);
+            }
+        }
+    }
+}
 
+int main() {
+
+    
+    // ---------- choose what to profile (change ONE line) ----------
+    auto Kernel = GEMMSubtileFinal;   // GEMMBaseline, GEMMTiling, or GEMMSubtileFinal
+
+    // ---------- basic config sanity ----------
+    assert(SUBTILE % SUB == 0);
+
+    // ---------- 1) VERIFY ON SMALL ----------
+    {
+        int M = 256, N = 256, K = 256;
+        float alpha = 1.0f, beta = 1.0f;
+
+        std::vector<float> A(M*K, 1.0f);
+        std::vector<float> B(K*N, 1.0f);
+        std::vector<float> C(M*N, 0.0f);
+        std::vector<float> Cinit = C;
+
+        float *dA = nullptr, *dB = nullptr, *dC = nullptr;
+        CHECK_CUDA(cudaMalloc(&dA, sizeof(float)*M*K));
+        CHECK_CUDA(cudaMalloc(&dB, sizeof(float)*K*N));
+        CHECK_CUDA(cudaMalloc(&dC, sizeof(float)*M*N));
+
+        CHECK_CUDA(cudaMemcpy(dA, A.data(), sizeof(float)*M*K, cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(dB, B.data(), sizeof(float)*K*N, cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(dC, C.data(), sizeof(float)*M*N, cudaMemcpyHostToDevice));
+
+        dim3 block, grid;
+
+        // Launch dims:
+        // - Baseline/Tiling often use TILE x TILE threads
+        // - SubtileFinal uses (SUBTILE/SUB) x (SUBTILE/SUB) threads
+        //
+        // To keep this file simple, we pick:
+        //   - if profiling subtile: use SUBTILE/SUB
+        //   - else: use TILE (common)
+        if (Kernel == GEMMSubtileFinal) {
+            block = dim3(SUBTILE / SUB, SUBTILE / SUB, 1);
+            grid  = dim3((N + SUBTILE - 1)/SUBTILE, (M + SUBTILE - 1)/SUBTILE, 1);
+        } else {
+            block = dim3(TILE, TILE, 1);
+            grid  = dim3((N + TILE - 1)/TILE, (M + TILE - 1)/TILE, 1);
+        }
+
+        Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+
+        CHECK_CUDA(cudaMemcpy(C.data(), dC, sizeof(float)*M*N, cudaMemcpyDeviceToHost));
+        verifyGEMM_small(A.data(), B.data(), C.data(), Cinit.data(), M, N, K, alpha, beta);
+
+        CHECK_CUDA(cudaFree(dA));
+        CHECK_CUDA(cudaFree(dB));
+        CHECK_CUDA(cudaFree(dC));
+
+        printf("Verification passed.\n");
+    }
+
+    // ---------- 2) PROFILE ON LARGE (ONLY THIS REGION) ----------
+    {
+        int N = 1 << 13;
+        int M = N, K = N;
+        float alpha = 1.0f, beta = 1.0f;
+
+        std::vector<float> A(M*K, 1.0f);
+        std::vector<float> B(K*N, 1.0f);
+        std::vector<float> C(M*N, 0.0f);
+
+        float *dA = nullptr, *dB = nullptr, *dC = nullptr;
+        CHECK_CUDA(cudaMalloc(&dA, sizeof(float)*M*K));
+        CHECK_CUDA(cudaMalloc(&dB, sizeof(float)*K*N));
+        CHECK_CUDA(cudaMalloc(&dC, sizeof(float)*M*N));
+
+        CHECK_CUDA(cudaMemcpy(dA, A.data(), sizeof(float)*M*K, cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(dB, B.data(), sizeof(float)*K*N, cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(dC, C.data(), sizeof(float)*M*N, cudaMemcpyHostToDevice));
+
+        dim3 block, grid;
+        if (Kernel == GEMMSubtileFinal) {
+            block = dim3(SUBTILE / SUB, SUBTILE / SUB, 1);
+            grid  = dim3((N + SUBTILE - 1)/SUBTILE, (M + SUBTILE - 1)/SUBTILE, 1);
+        } else {
+            block = dim3(TILE, TILE, 1);
+            grid  = dim3((N + TILE - 1)/TILE, (M + TILE - 1)/TILE, 1);
+        }
+
+        // warmup (not profiled)
+        Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+
+        const int iters = 10;
+
+        CHECK_CUDA(cudaProfilerStart());
+        for (int it = 0; it < iters; ++it) {
+            Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        }
+        CHECK_CUDA(cudaProfilerStop());
+
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+
+        CHECK_CUDA(cudaFree(dA));
+        CHECK_CUDA(cudaFree(dB));
+        CHECK_CUDA(cudaFree(dC));
+
+        printf("Profiling loop finished.\n");
+    }
+
+    return 0;
 }
