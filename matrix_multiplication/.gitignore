@@ -1,0 +1,20 @@
+# Compiled Binaries
+prof_*
+*.o
+*.out
+
+# Nsight Compute Reports
+*.ncu-rep
+*.report
+
+# Nsight Systems Reports
+*.nsys-rep
+*.qdrep
+*.sqlite
+
+# Installer files
+*.deb
+
+# VS Code / IDE stuff
+.vscode/
+.DS_Store

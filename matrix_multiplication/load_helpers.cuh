@@ -217,8 +217,16 @@ void warp_load_slab_vec4_swizzleB(
     ATile[rTile][cTile+2] = a4.z;
     ATile[rTile][cTile+3] = a4.w;
 
+    ATile[rTile][cTile+0] = 1.0f;
+    ATile[rTile][cTile+1] = 1.0f;
+    ATile[rTile][cTile+2] = 1.0f;
+    ATile[rTile][cTile+3] = 1.0f;
+
+
     // ---- B
-    int bRow = chunk + rTile;
+    
+
+    int bRow = (chunk * SUBTILE) + rTile;;
     int bCol = startCol + cTile;
     int idxB = bRow * N + bCol;
 
@@ -229,18 +237,25 @@ void warp_load_slab_vec4_swizzleB(
 
     float4 b4 = make_float4(0,0,0,0);
     if (bRow < K && bCol + 3 < N && ((idxB & 3) == 0)) {
-        b4 = *reinterpret_cast<const float4*>(&B[idxB]);
+     b4 = *reinterpret_cast<const float4*>(&B[idxB]);
     } else if (bRow < K) {
-        b4.x = (bCol+0 < N) ? B[idxB+0] : 0.f;
-        b4.y = (bCol+1 < N) ? B[idxB+1] : 0.f;
-        b4.z = (bCol+2 < N) ? B[idxB+2] : 0.f;
-        b4.w = (bCol+3 < N) ? B[idxB+3] : 0.f;
+    // Explicitly calculate offset to avoid pointer confusion
+    b4.x = (bCol + 0 < N) ? B[bRow * N + (bCol + 0)] : 0.f;
+    b4.y = (bCol + 1 < N) ? B[bRow * N + (bCol + 1)] : 0.f;
+    b4.z = (bCol + 2 < N) ? B[bRow * N + (bCol + 2)] : 0.f;
+    b4.w = (bCol + 3 < N) ? B[bRow * N + (bCol + 3)] : 0.f;
     }
 
     BTile[rTile][cSwz+0] = b4.x;
     BTile[rTile][cSwz+1] = b4.y;
     BTile[rTile][cSwz+2] = b4.z;
     BTile[rTile][cSwz+3] = b4.w;
+
+    BTile[rTile][cSwz+0] = 1.0f;
+    BTile[rTile][cSwz+1] = 1.0f;
+    BTile[rTile][cSwz+2] = 1.0f;
+    BTile[rTile][cSwz+3] = 1.0f;
+
 }
 
 

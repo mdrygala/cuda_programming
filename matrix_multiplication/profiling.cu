@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cassert>
 #include <cmath>
+#include <iostream>
 
 #include "config.h"
 #include "kernels.cuh"
@@ -48,7 +49,7 @@ int main() {
 
     
     // ---------- choose what to profile (change ONE line) ----------
-    auto Kernel = GEMMBaseline;   // GEMMBaseline, GEMMTiling, or GEMMSubtileFinal
+    auto Kernel = GEMMSubtileFinal;   // GEMMBaseline, GEMMTiling, or GEMMSubtileFinal
 
     // ---------- basic config sanity ----------
     assert(SUBTILE % SUB == 0);
@@ -100,12 +101,13 @@ int main() {
         CHECK_CUDA(cudaFree(dB));
         CHECK_CUDA(cudaFree(dC));
 
+
         printf("Verification passed.\n");
     }
 
     // ---------- 2) PROFILE ON LARGE (ONLY THIS REGION) ----------
     {
-        int N = 1 << 13;
+        int N = 1 << 11;
         int M = N, K = N;
         float alpha = 1.0f, beta = 1.0f;
 
@@ -131,21 +133,47 @@ int main() {
             grid  = dim3((N + TILE - 1)/TILE, (M + TILE - 1)/TILE, 1);
         }
 
-        // warmup (not profiled)
+        // 1. Warmup
         Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
-        CHECK_CUDA(cudaGetLastError());
         CHECK_CUDA(cudaDeviceSynchronize());
 
-        const int iters = 10;
+        // 2. Instrument with CUDA Events
+        cudaEvent_t start, stop;
+        CHECK_CUDA(cudaEventCreate(&start));
+        CHECK_CUDA(cudaEventCreate(&stop));
 
         CHECK_CUDA(cudaProfilerStart());
-        for (int it = 0; it < iters; ++it) {
-            Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
-        }
+        CHECK_CUDA(cudaEventRecord(start));
+        
+        Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        
+        CHECK_CUDA(cudaEventRecord(stop));
         CHECK_CUDA(cudaProfilerStop());
 
-        CHECK_CUDA(cudaGetLastError());
-        CHECK_CUDA(cudaDeviceSynchronize());
+        CHECK_CUDA(cudaEventSynchronize(stop));
+        float milliseconds = 0;
+        CHECK_CUDA(cudaEventElapsedTime(&milliseconds, start, stop));
+
+        // 3. GOODPUT MATH
+        // Formula: (2 * M * N * K) / (Time in seconds)
+        double flops = 2.0 * M * N * K;
+        double seconds = milliseconds / 1000.0;
+        double gflops = (flops * 1e-9) / seconds;
+        double tflops = gflops / 1000.0;
+
+        // Theoretical Peak for A100-SXM4-40GB (FP32) is ~19.5 TFLOPS
+        double a100_peak = 19.5; 
+        double efficiency = (tflops / a100_peak) * 100.0;
+
+        printf("\n--- Goodput Statistics ---\n");
+        printf("Problem Size: %d x %d x %d\n", M, N, K);
+        printf("Kernel Time:  %.4f ms\n", milliseconds);
+        printf("Achieved:     %.2f GFLOPS (%.2f TFLOPS)\n", gflops, tflops);
+        printf("Efficiency:   %.2f%% of Theoretical Peak (19.5 TFLOPS)\n", efficiency);
+        printf("--------------------------\n");
+
+        CHECK_CUDA(cudaEventDestroy(start));
+        CHECK_CUDA(cudaEventDestroy(stop));
 
         CHECK_CUDA(cudaFree(dA));
         CHECK_CUDA(cudaFree(dB));

@@ -152,5 +152,5 @@ __global__ void GEMMSubtileFinal(int M,int N,int K,
                                  float beta,
                                  float* __restrict__ C)
 {
-    GEMMSubTiling<LoaderVec4Swizzle, ComputeSwizzle>(M, N, K, alpha, A, B, beta, C);
+    GEMMSubTiling<LoaderVec4, ComputeNaive>(M, N, K, alpha, A, B, beta, C);
 }
