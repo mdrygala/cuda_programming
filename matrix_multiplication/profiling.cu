@@ -60,7 +60,18 @@ int main() {
         float alpha = 1.0f, beta = 1.0f;
 
         std::vector<float> A(M*K, 1.0f);
+    
+        for (int i = 0; i < M; i++) {
+            for (int k = 0; k < K; k++) {
+                A[i*K + k] = float(k + 1);
+            }
+        }
         std::vector<float> B(K*N, 1.0f);
+        for (int k = 0; k < K; k++) {
+            for (int j = 0; j < N; j++) {
+                B[k*N + j] = float(k + 1);
+            }
+        }
         std::vector<float> C(M*N, 0.0f);
         std::vector<float> Cinit = C;
 
@@ -104,6 +115,7 @@ int main() {
 
         printf("Verification passed.\n");
     }
+   
 
     // ---------- 2) PROFILE ON LARGE (ONLY THIS REGION) ----------
     {

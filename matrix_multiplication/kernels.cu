@@ -1,7 +1,9 @@
 #include <cuda_runtime.h>
+#include <cstdio>
 #include "config.h"
 #include "load_helpers.cuh"
 #include "compute_helpers.cuh"
+#include "store_helpers.cuh"
 #include "kernels.cuh"          // include declarations
 
 // -------------------- Baseline --------------------
@@ -76,7 +78,7 @@ __global__ void GEMMTiling(int M, int N, int K,
 }
 
 // -------------------- Subtiling template (definition stays in .cu) --------------------
-template <typename LoaderFunc, typename ComputeFunc>
+template <typename LoaderFunc, typename ComputeFunc, typename StoreFunc>
 __device__ __forceinline__ void GEMMSubTiling(int M, int N, int K,
                               float alpha,
                               const float* __restrict__ A,
@@ -87,60 +89,47 @@ __device__ __forceinline__ void GEMMSubTiling(int M, int N, int K,
     __shared__ float ATile[SUBTILE][SUBTILE+1];
     __shared__ float BTile[SUBTILE][SUBTILE+1];
 
-    int strideRow = SUBTILE * gridDim.y;
-    int strideCol = SUBTILE * gridDim.x;
+    int startRow = blockIdx.y * SUBTILE;
+    int startCol = blockIdx.x * SUBTILE;
 
     int threadRowTile = threadIdx.y * SUB;
     int threadColTile = threadIdx.x * SUB;
 
-    for (int startRow = blockIdx.y * SUBTILE; startRow < M; startRow += strideRow) {
-        for (int startCol = blockIdx.x * SUBTILE; startCol < N; startCol += strideCol) {
+    float sum[SUB][SUB];
+    #pragma unroll
+    for (int i = 0; i < SUB; i++)
+        #pragma unroll
+        for (int j = 0; j < SUB; j++)
+            sum[i][j] = 0.0f;
 
-            int threadRowGlobalOrigin = startRow + threadRowTile;
-            int threadColGlobalOrigin = startCol + threadColTile;
+    for (int chunk = 0; chunk < K; chunk += SUBTILE){
+        int threadRowGlobalOriginA = startRow;
+        int threadColGlobalOriginA = chunk;
 
-            float sum[SUB][SUB];
-            #pragma unroll
-            for (int i = 0; i < SUB; i++)
-                #pragma unroll
-                for (int j = 0; j < SUB; j++)
-                    sum[i][j] = 0.0f;
+        int threadRowGlobalOriginB = chunk;
+        int threadColGlobalOriginB =  startCol;
 
-            for (int chunk = 0; chunk < K; chunk += SUBTILE){
-                int threadRowGlobalOriginA = threadRowGlobalOrigin;
-                int threadColGlobalOriginA = threadColTile + chunk;
+        LoaderFunc::run(A, ATile, B, BTile, M, K, N,
+                        startRow, startCol,
+                        threadRowTile, threadColTile,
+                        threadRowGlobalOriginA, threadColGlobalOriginA,
+                        threadRowGlobalOriginB, threadColGlobalOriginB);
+        __syncthreads();
 
-                int threadRowGlobalOriginB = threadRowTile + chunk;
-                int threadColGlobalOriginB = threadColGlobalOrigin;
 
-                LoaderFunc::run(A, ATile, B, BTile, M, K, N,
-                                startRow, startCol, chunk,
-                                threadRowTile, threadColTile,
-                                threadRowGlobalOriginA, threadColGlobalOriginA,
-                                threadRowGlobalOriginB, threadColGlobalOriginB);
-                __syncthreads();
-
-                int kmax = min(SUBTILE, K - chunk);
-                ComputeFunc::run(ATile, BTile, K, kmax,
-                                 sum, threadRowTile, threadColTile);
-                __syncthreads();
-            }
-
-            #pragma unroll
-            for (int i = 0; i < SUB; i++){
-                int r = threadRowGlobalOrigin + i;
-                if (r >= M) break;
-                #pragma unroll
-                for (int j = 0; j < SUB; j++){
-                    int c = threadColGlobalOrigin + j;
-                    if (c >= N) break;
-                    int idx = r * N + c;
-                    float cold = (beta != 0.0f) ? C[idx] : 0.0f;
-                    C[idx] = alpha * sum[i][j] + beta * cold;
-                }
-            }
-        }
+        int kmax = min(SUBTILE, K - chunk);
+        ComputeFunc::run(ATile, BTile, K, kmax,
+                            sum, threadRowTile, threadColTile);
+        __syncthreads();
     }
+    
+
+    StoreFunc::run(sum, C, M, N, startRow, startCol,
+                threadRowTile, threadColTile, alpha, beta);
+
+
+    
+        
 }
 
 // -------------------- One concrete subtile kernel name --------------------
@@ -152,5 +141,5 @@ __global__ void GEMMSubtileFinal(int M,int N,int K,
                                  float beta,
                                  float* __restrict__ C)
 {
-    GEMMSubTiling<LoaderVec4, ComputeNaive>(M, N, K, alpha, A, B, beta, C);
+    GEMMSubTiling<LoaderSwzl, ComputeSwzl, StoreVec4>(M, N, K, alpha, A, B, beta, C);
 }

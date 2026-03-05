@@ -8,7 +8,7 @@ void load_subtile_naive(const float* __restrict__ A,
                         const float* __restrict__ B,
                         float BTile[SUBTILE][SUBTILE+1],
                         int M, int K, int N,
-                        int startRow, int startCol, int chunk,
+                        int startRow, int startCol,
                         int threadRowTile, int threadColTile,
                         int threadRowGlobalOriginA, int threadColGlobalOriginA,
                         int threadRowGlobalOriginB, int threadColGlobalOriginB)
@@ -16,18 +16,15 @@ void load_subtile_naive(const float* __restrict__ A,
 
     #pragma unroll
     for (int i = 0; i < SUB; i++){
-        int rowA = threadRowGlobalOriginA + i;
-        int rowB = threadRowGlobalOriginB + i;
-
         int rowTile = threadRowTile + i;
+        int rowA = threadRowGlobalOriginA + rowTile;
+        int rowB = threadRowGlobalOriginB + rowTile;
 
         #pragma unroll
         for (int j = 0; j < SUB; j++){
-
-            int colA = threadColGlobalOriginA + j;
-            int colB = threadColGlobalOriginB + j;
-
             int colTile = threadColTile + j;
+            int colA = threadColGlobalOriginA + colTile;
+            int colB = threadColGlobalOriginB + colTile;
         
 
             //Loads into shared memory, in 
@@ -46,7 +43,7 @@ void load_subtile_vec4(const float* __restrict__ A,
                        const float* __restrict__ B,
                        float BTile[SUBTILE][SUBTILE+1],
                        int M, int K, int N,
-                       int startRow, int startCol, int chunk,
+                       int startRow, int startCol,
                        int threadRowTile, int threadColTile,
                        int threadRowGlobalOriginA, int threadColGlobalOriginA,
                        int threadRowGlobalOriginB, int threadColGlobalOriginB)
@@ -54,17 +51,18 @@ void load_subtile_vec4(const float* __restrict__ A,
 
     #pragma unroll
     for (int i = 0; i < SUB; i++){
-        int rowA = threadRowGlobalOriginA + i;
-        int rowB = threadRowGlobalOriginB + i;
-
         int rowTile = threadRowTile + i;
+        int rowA = threadRowGlobalOriginA + rowTile;
+        int rowB = threadRowGlobalOriginB + rowTile;
+
+        
         #pragma unroll
         for (int j = 0; j < SUB; j+=4){
-
-            int colA = threadColGlobalOriginA + j;
-            int colB = threadColGlobalOriginB + j;
-
             int colTile = threadColTile + j;
+            int colA = threadColGlobalOriginA + colTile;
+            int colB = threadColGlobalOriginB + colTile;
+
+            
 
             //Prefer the floa4 load when possible
             int idxA = rowA * K + colA;
@@ -105,158 +103,169 @@ void load_subtile_vec4(const float* __restrict__ A,
 }
 
 
-// Vectorized + swizzle to avoid bank conflicts in B
 __device__ __forceinline__
-void load_subtile_vec4_swizzle(const float* __restrict__ A,
-                               float ATile[SUBTILE][SUBTILE+1],
-                               const float* __restrict__ B,
-                               float BTile[SUBTILE][SUBTILE+1],
-                               int M, int K, int N,
-                               int startRow, int startCol, int chunk,
-                               int threadRowTile, int threadColTile,
-                               int threadRowGlobalOriginA, int threadColGlobalOriginA,
-                               int threadRowGlobalOriginB, int threadColGlobalOriginB)
+void load_subtile_slab(const float* __restrict__ A,
+                       float ATile[SUBTILE][SUBTILE+1],
+                       const float* __restrict__ B,
+                       float BTile[SUBTILE][SUBTILE+1],
+                       int M, int K, int N,
+                       int startRow, int startCol,
+                       int threadRowTile, int threadColTile,
+                       int threadRowGlobalOriginA, int threadColGlobalOriginA,
+                       int threadRowGlobalOriginB, int threadColGlobalOriginB)
 {
-    static_assert(SUB % 4 == 0, "SUB must be multiple of 4 for vec4 loads");
+int slabDimRows = (SUBTILE + 3) >> 2; // num of slabs that fit vertically within tile
+int slabDimCols = (SUBTILE + 31) >> 5;  // num of slabs that fit horizontally within tile
+int totalSlabs =  slabDimRows * slabDimCols;
 
-    #pragma unroll
-    for (int i = 0; i < SUB; i++){
-        int rowA = threadRowGlobalOriginA + i;
-        int rowB = threadRowGlobalOriginB + i;
+int numWarps = blockDim.x * blockDim.y >> 5; // num of warps within a block
 
-        int rowTile = threadRowTile + i;
+int threadBlockIdx = threadIdx.y * blockDim.x + threadIdx.x; // thread index within a block
+int warpId = threadBlockIdx >> 5; // Id of the warp within a block
+int laneId = threadBlockIdx & 31; // Within a warp the id of a thread
 
-        // Swizzle based on shared row index (rowTile)
-        const int colSwz = (rowTile & SWZ_MASK) << SWZ_SHIFT;
+int slabRowIdx = laneId >> 3; // Among the 4 rows in a slab which one the thread is assigned to
+int slabColIdx = laneId & 7; // among the 8 columns in a slab which one is the thread assigned to
 
+ 
+
+for (int slabNum = warpId; slabNum < totalSlabs; slabNum += numWarps){ // loop over all slabs
+    int slabRowStart = slabNum / slabDimCols; // map back to the starting row of tile for that slab
+    int slabColStart = slabNum % slabDimCols; // map back to starting col of tile for that slab
+    int rowTile = 4 * slabRowStart + slabRowIdx; // tells us which row of the tile the thread is working on
+    int colTile = 32 * slabColStart + 4 * slabColIdx; // tells us which col of the tile the thread is starting on
+
+    //Load in A
+    int rowA = threadRowGlobalOriginA + rowTile;
+    int colA = threadColGlobalOriginA + colTile;
+    int idxA = rowA * K + colA;
+    if (rowA < M && colA + 3 < K && ((idxA & 3) == 0)){
+                float4 tmpA = reinterpret_cast<const float4*>(&A[idxA])[0];
+                ATile[rowTile][colTile + 0] = tmpA.x;
+                ATile[rowTile][colTile + 1] = tmpA.y;
+                ATile[rowTile][colTile + 2] = tmpA.z;
+                ATile[rowTile][colTile + 3] = tmpA.w;
+            } 
+    //Otherwise fall back to scalar loads
+    else {
         #pragma unroll
-        for (int j = 0; j < SUB; j += 4){
-            int colA = threadColGlobalOriginA + j;
-            int colB = threadColGlobalOriginB + j;
-
-            int colTileA = threadColTile + j;
-            int colTileB = threadColTile + j;
-
-            int colTileBSwz = colTileB ^ colSwz;
-
-            // ---- A load
-            int idxA = rowA * K + colA;
-            if (rowA < M && colA + 3 < K && ((idxA & 3) == 0)){
-                float4 tmpA = *reinterpret_cast<const float4*>(&A[idxA]);
-                ATile[rowTile][colTileA + 0] = tmpA.x;
-                ATile[rowTile][colTileA + 1] = tmpA.y;
-                ATile[rowTile][colTileA + 2] = tmpA.z;
-                ATile[rowTile][colTileA + 3] = tmpA.w;
-            } else {
-                #pragma unroll
-                for (int t = 0; t < 4; t++){
-                    int c = colA + t;
-                    ATile[rowTile][colTileA + t] =
-                        (rowA < M && c < K) ? A[rowA * K + c] : 0.0f;
-                }
-            }
-
-            // ---- B load (store swizzled in shared)
-            int idxB = rowB * N + colB;
-            if (rowB < K && colB + 3 < N && ((idxB & 3) == 0)){
-                float4 tmpB = *reinterpret_cast<const float4*>(&B[idxB]);
-                BTile[rowTile][colTileBSwz + 0] = tmpB.x;
-                BTile[rowTile][colTileBSwz + 1] = tmpB.y;
-                BTile[rowTile][colTileBSwz + 2] = tmpB.z;
-                BTile[rowTile][colTileBSwz + 3] = tmpB.w;
-            } else {
-                #pragma unroll
-                for (int t = 0; t < 4; t++){
-                    int c = colB + t;
-                    BTile[rowTile][colTileBSwz + t] =
-                        (rowB < K && c < N) ? B[rowB * N + c] : 0.0f;
-                }
-            }
+        for (int k =0; k < 4; k++){
+            int colAGlobal = colA + k;
+            ATile[rowTile][colTile + k] =
+                (rowA < M && colAGlobal < K) ? A[rowA * K + colAGlobal] : 0.0f;
         }
     }
+
+
+    //Load in B
+    int rowB = threadRowGlobalOriginB + rowTile;
+    int colB = threadColGlobalOriginB + colTile;
+    int idxB = rowB * N +  colB;
+    if (rowB < K && colB + 3 < N && ((idxB & 3) == 0)){
+                float4 tmpB = reinterpret_cast<const float4*>(&B[idxB])[0];
+                BTile[rowTile][colTile + 0] = tmpB.x;
+                BTile[rowTile][colTile + 1] = tmpB.y;
+                BTile[rowTile][colTile + 2] = tmpB.z;
+                BTile[rowTile][colTile + 3] = tmpB.w;
+            } else {
+                #pragma unroll
+                for (int k =0; k < 4; k++){
+                    int colBGlobal = colB + k;
+                    BTile[rowTile][colTile + k] =
+                        (rowB < K && colBGlobal < N) ? B[rowB * N + colBGlobal] : 0.0f;
+                }
+            }
 }
 
 
-//Warp Tiling
+}
+
+
+
 __device__ __forceinline__
-void warp_load_slab_vec4_swizzleB(
-    const float* __restrict__ A,
-    float ATile[SUBTILE][SUBTILE+1],
-    const float* __restrict__ B,
-    float BTile[SUBTILE][SUBTILE+1],
-    int M, int K, int N,
-    int startRow, int startCol, int chunk,
-    int rowBase, int colBase,
-    int laneId
-){
-    int laneRow  = laneId >> 3;     // 0..3
-    int laneCol4 = laneId & 7;      // 0..7
-    int rTile = rowBase + laneRow;
-    int cTile = colBase + laneCol4 * 4;
+void load_subtile_slab_swizzle(const float* __restrict__ A,
+                       float ATile[SUBTILE][SUBTILE+1],
+                       const float* __restrict__ B,
+                       float BTile[SUBTILE][SUBTILE+1],
+                       int M, int K, int N,
+                       int startRow, int startCol,
+                       int threadRowTile, int threadColTile,
+                       int threadRowGlobalOriginA, int threadColGlobalOriginA,
+                       int threadRowGlobalOriginB, int threadColGlobalOriginB){
+int slabDimRows = (SUBTILE + 3) >> 2; // num of slabs that fit vertically within tile
+int slabDimCols = (SUBTILE + 31) >> 5;  // num of slabs that fit horizontally within tile
+int totalSlabs =  slabDimRows * slabDimCols;
 
-    // Guard against accidental OOB in shared
-    if (rTile >= SUBTILE || cTile + 3 >= SUBTILE) return;
+int numWarps = blockDim.x * blockDim.y >> 5; // num of warps within a block
 
-    // ---- A
-    int aRow = startRow + rTile;
-    int aCol = chunk + cTile;
-    int idxA = aRow * K + aCol;
+int threadBlockIdx = threadIdx.y * blockDim.x + threadIdx.x; // thread index within a block
+int warpId = threadBlockIdx >> 5; // Id of the warp within a block
+int laneId = threadBlockIdx & 31; // Within a warp the id of a thread
 
-    float4 a4 = make_float4(0,0,0,0);
-    if (aRow < M && aCol + 3 < K && ((idxA & 3) == 0)) {
-        a4 = *reinterpret_cast<const float4*>(&A[idxA]);
-    } else if (aRow < M) {
-        a4.x = (aCol+0 < K) ? A[idxA+0] : 0.f;
-        a4.y = (aCol+1 < K) ? A[idxA+1] : 0.f;
-        a4.z = (aCol+2 < K) ? A[idxA+2] : 0.f;
-        a4.w = (aCol+3 < K) ? A[idxA+3] : 0.f;
+int slabRowIdx = laneId >> 3; // Among the 4 rows in a slab which one the thread is assigned to
+int slabColIdx = laneId & 7; // among the 8 columns in a slab which one is the thread assigned to
+
+ 
+
+for (int slabNum = warpId; slabNum < totalSlabs; slabNum += numWarps){ // loop over all slabs
+    int slabRowStart = slabNum / slabDimCols; // map back to the starting row of tile for that slab
+    int slabColStart = slabNum % slabDimCols; // map back to starting col of tile for that slab
+    int rowTile = 4 * slabRowStart + slabRowIdx; // tells us which row of the tile the thread is working on
+    int colTile = 32 * slabColStart + 4 * slabColIdx; // tells us which col of the tile the thread is starting on
+
+    //Load in A
+    int rowA = threadRowGlobalOriginA + rowTile;
+    int colA = threadColGlobalOriginA + colTile;
+    int idxA = rowA * K + colA;
+    if (rowA < M && colA + 3 < K && ((idxA & 3) == 0)){
+                float4 tmpA = reinterpret_cast<const float4*>(&A[idxA])[0];
+                ATile[rowTile][colTile + 0] = tmpA.x;
+                ATile[rowTile][colTile + 1] = tmpA.y;
+                ATile[rowTile][colTile + 2] = tmpA.z;
+                ATile[rowTile][colTile + 3] = tmpA.w;
+            } 
+    //Otherwise fall back to scalar loads
+    else {
+        #pragma unroll
+        for (int k =0; k < 4; k++){
+            int colAGlobal = colA + k;
+            ATile[rowTile][colTile + k] =
+                (rowA < M && colAGlobal < K) ? A[rowA * K + colAGlobal] : 0.0f;
+        }
     }
 
-    ATile[rTile][cTile+0] = a4.x;
-    ATile[rTile][cTile+1] = a4.y;
-    ATile[rTile][cTile+2] = a4.z;
-    ATile[rTile][cTile+3] = a4.w;
 
-    ATile[rTile][cTile+0] = 1.0f;
-    ATile[rTile][cTile+1] = 1.0f;
-    ATile[rTile][cTile+2] = 1.0f;
-    ATile[rTile][cTile+3] = 1.0f;
+    //Load in B
+    int rowB = threadRowGlobalOriginB + rowTile;
+    int colB = threadColGlobalOriginB + colTile;
+    int idxB = rowB * N +  colB;
+
+    int shared_segment = colTile >> 5;
+    int shared_bank_idx = colTile & 31;
+    int new_shared_bank_idx = (shared_segment + shared_bank_idx) & 31;
+    int newColTile = (shared_segment << 5) + new_shared_bank_idx;
 
 
-    // ---- B
-    
+    if (rowB < K && colB + 3 < N && ((idxB & 3) == 0)){
+                float4 tmpB = reinterpret_cast<const float4*>(&B[idxB])[0];
+                BTile[rowTile][newColTile + 0] = tmpB.x;
+                BTile[rowTile][newColTile + 1] = tmpB.y;
+                BTile[rowTile][newColTile + 2] = tmpB.z;
+                BTile[rowTile][newColTile + 3] = tmpB.w;
+            } else {
+                #pragma unroll
+                for (int k =0; k < 4; k++){
+                    int colBGlobal = colB + k;
+                    BTile[rowTile][newColTile+ k] =
+                        (rowB < K && colBGlobal < N) ? B[rowB * N + colBGlobal] : 0.0f;
+                }
+            }
+}
 
-    int bRow = (chunk * SUBTILE) + rTile;;
-    int bCol = startCol + cTile;
-    int idxB = bRow * N + bCol;
-
-    const int swz  = (rTile & SWZ_MASK) << SWZ_SHIFT;
-    const int cSwz = cTile ^ swz;
-
-    if (cSwz < 0 || cSwz + 3 >= SUBTILE) return;
-
-    float4 b4 = make_float4(0,0,0,0);
-    if (bRow < K && bCol + 3 < N && ((idxB & 3) == 0)) {
-     b4 = *reinterpret_cast<const float4*>(&B[idxB]);
-    } else if (bRow < K) {
-    // Explicitly calculate offset to avoid pointer confusion
-    b4.x = (bCol + 0 < N) ? B[bRow * N + (bCol + 0)] : 0.f;
-    b4.y = (bCol + 1 < N) ? B[bRow * N + (bCol + 1)] : 0.f;
-    b4.z = (bCol + 2 < N) ? B[bRow * N + (bCol + 2)] : 0.f;
-    b4.w = (bCol + 3 < N) ? B[bRow * N + (bCol + 3)] : 0.f;
-    }
-
-    BTile[rTile][cSwz+0] = b4.x;
-    BTile[rTile][cSwz+1] = b4.y;
-    BTile[rTile][cSwz+2] = b4.z;
-    BTile[rTile][cSwz+3] = b4.w;
-
-    BTile[rTile][cSwz+0] = 1.0f;
-    BTile[rTile][cSwz+1] = 1.0f;
-    BTile[rTile][cSwz+2] = 1.0f;
-    BTile[rTile][cSwz+3] = 1.0f;
 
 }
+
+
 
 
 struct LoaderNaive {
@@ -267,7 +276,7 @@ struct LoaderNaive {
         const float* __restrict__ B,
         float BTile[SUBTILE][SUBTILE+1],
         int M, int K, int N,
-        int startRow, int startCol, int chunk,
+        int startRow, int startCol,
         int threadRowTile, int threadColTile,
         int threadRowGlobalOriginA, int threadColGlobalOriginA,
         int threadRowGlobalOriginB, int threadColGlobalOriginB
@@ -275,7 +284,7 @@ struct LoaderNaive {
         load_subtile_naive(
             A, ATile, B, BTile,
             M, K, N,
-            startRow, startCol, chunk,
+            startRow, startCol,
             threadRowTile, threadColTile,
             threadRowGlobalOriginA, threadColGlobalOriginA,
             threadRowGlobalOriginB, threadColGlobalOriginB
@@ -292,7 +301,7 @@ struct LoaderVec4 {
         const float* __restrict__ B,
         float BTile[SUBTILE][SUBTILE+1],
         int M, int K, int N,
-        int startRow, int startCol, int chunk,
+        int startRow, int startCol,
         int threadRowTile, int threadColTile,
         int threadRowGlobalOriginA, int threadColGlobalOriginA,
         int threadRowGlobalOriginB, int threadColGlobalOriginB
@@ -300,7 +309,7 @@ struct LoaderVec4 {
         load_subtile_vec4(
             A, ATile, B, BTile,
             M, K, N,
-            startRow, startCol, chunk,
+            startRow, startCol,
             threadRowTile, threadColTile,
             threadRowGlobalOriginA, threadColGlobalOriginA,
             threadRowGlobalOriginB, threadColGlobalOriginB
@@ -309,8 +318,7 @@ struct LoaderVec4 {
 };
 
 
-struct LoaderVec4Swizzle {
-
+struct LoaderSlab {
     __device__ __forceinline__
     static void run(
         const float* __restrict__ A,
@@ -318,15 +326,15 @@ struct LoaderVec4Swizzle {
         const float* __restrict__ B,
         float BTile[SUBTILE][SUBTILE+1],
         int M, int K, int N,
-        int startRow, int startCol, int chunk,
+        int startRow, int startCol,
         int threadRowTile, int threadColTile,
         int threadRowGlobalOriginA, int threadColGlobalOriginA,
         int threadRowGlobalOriginB, int threadColGlobalOriginB
     ) {
-        load_subtile_vec4_swizzle(
+        load_subtile_slab(
             A, ATile, B, BTile,
             M, K, N,
-            startRow, startCol, chunk,
+            startRow, startCol,
             threadRowTile, threadColTile,
             threadRowGlobalOriginA, threadColGlobalOriginA,
             threadRowGlobalOriginB, threadColGlobalOriginB
@@ -335,7 +343,10 @@ struct LoaderVec4Swizzle {
 };
 
 
-struct LoaderWarpSlabVec4SwizzleB {
+
+
+
+struct LoaderSwzl {
     __device__ __forceinline__
     static void run(
         const float* __restrict__ A,
@@ -343,13 +354,20 @@ struct LoaderWarpSlabVec4SwizzleB {
         const float* __restrict__ B,
         float BTile[SUBTILE][SUBTILE+1],
         int M, int K, int N,
-        int startRow, int startCol, int chunk,
-        int /*threadRowTile*/, int /*threadColTile*/,
-        int /*threadRowGlobalOriginA*/, int /*threadColGlobalOriginA*/,
-        int /*threadRowGlobalOriginB*/, int /*threadColGlobalOriginB*/
+        int startRow, int startCol,
+        int threadRowTile, int threadColTile,
+        int threadRowGlobalOriginA, int threadColGlobalOriginA,
+        int threadRowGlobalOriginB, int threadColGlobalOriginB
     ) {
-        // NOTE: warp-slab loader doesn't use the per-thread microtile coordinates.
-        // You must call it from the kernel with rowBase/colBase loops.
-        // So this wrapper isn't very meaningful unless you redesign the interface.
+        load_subtile_slab_swizzle(
+            A, ATile, B, BTile,
+            M, K, N,
+            startRow, startCol,
+            threadRowTile, threadColTile,
+            threadRowGlobalOriginA, threadColGlobalOriginA,
+            threadRowGlobalOriginB, threadColGlobalOriginB
+        );
     }
 };
+
+
