@@ -116,7 +116,6 @@ int main() {
         printf("Verification passed.\n");
     }
    
-
     // ---------- 2) PROFILE ON LARGE (ONLY THIS REGION) ----------
     {
         int N = 1 << 11;
