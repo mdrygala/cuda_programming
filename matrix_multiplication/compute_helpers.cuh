@@ -48,7 +48,6 @@ void compute_subtile_swizzle(const float ATile[SUBTILE][SUBTILE+1],
     int new_shared_bank_idx = (shared_segment + shared_bank_idx) & 31;
     int newColTile = (shared_segment << 5) + new_shared_bank_idx;
 
-
     #pragma unroll
     for (int k = 0; k < kmax; k++){
         float AReg[SUB];
