@@ -112,20 +112,21 @@ void load_subtile_slab(const float* __restrict__ A,
                        int startRow, int startCol,
                        int threadRowTile, int threadColTile,
                        int threadRowGlobalOriginA, int threadColGlobalOriginA,
-                       int threadRowGlobalOriginB, int threadColGlobalOriginB)
+                       int threadRowGlobalOriginB, int threadColGlobalOriginB,
+                       int warpId, int totalSlabs, int numWarps, int slabRowIdx, int slabColIdx, int slabDimCols)
 {
-int slabDimRows = (SUBTILE + 3) >> 2; // num of slabs that fit vertically within tile
-int slabDimCols = (SUBTILE + 31) >> 5;  // num of slabs that fit horizontally within tile
-int totalSlabs =  slabDimRows * slabDimCols;
+// int slabDimRows = (SUBTILE + 3) >> 2; // num of slabs that fit vertically within tile
+// int slabDimCols = (SUBTILE + 31) >> 5;  // num of slabs that fit horizontally within tile
+// int totalSlabs =  slabDimRows * slabDimCols;
 
-int numWarps = blockDim.x * blockDim.y >> 5; // num of warps within a block
+// int numWarps = blockDim.x * blockDim.y >> 5; // num of warps within a block
 
-int threadBlockIdx = threadIdx.y * blockDim.x + threadIdx.x; // thread index within a block
-int warpId = threadBlockIdx >> 5; // Id of the warp within a block
-int laneId = threadBlockIdx & 31; // Within a warp the id of a thread
+// int threadBlockIdx = threadIdx.y * blockDim.x + threadIdx.x; // thread index within a block
+// int warpId = threadBlockIdx >> 5; // Id of the warp within a block
+// int laneId = threadBlockIdx & 31; // Within a warp the id of a thread
 
-int slabRowIdx = laneId >> 3; // Among the 4 rows in a slab which one the thread is assigned to
-int slabColIdx = laneId & 7; // among the 8 columns in a slab which one is the thread assigned to
+// int slabRowIdx = laneId >> 3; // Among the 4 rows in a slab which one the thread is assigned to
+// int slabColIdx = laneId & 7; // among the 8 columns in a slab which one is the thread assigned to
 
  
 
@@ -182,6 +183,7 @@ for (int slabNum = warpId; slabNum < totalSlabs; slabNum += numWarps){ // loop o
 
 
 
+
 __device__ __forceinline__
 void load_subtile_slab_swizzle(const float* __restrict__ A,
                        float ATile[SUBTILE][SUBTILE+1],
@@ -191,27 +193,16 @@ void load_subtile_slab_swizzle(const float* __restrict__ A,
                        int startRow, int startCol,
                        int threadRowTile, int threadColTile,
                        int threadRowGlobalOriginA, int threadColGlobalOriginA,
-                       int threadRowGlobalOriginB, int threadColGlobalOriginB){
-int slabDimRows = (SUBTILE + 3) >> 2; // num of slabs that fit vertically within tile
-int slabDimCols = (SUBTILE + 31) >> 5;  // num of slabs that fit horizontally within tile
-int totalSlabs =  slabDimRows * slabDimCols;
-
-int numWarps = blockDim.x * blockDim.y >> 5; // num of warps within a block
-
-int threadBlockIdx = threadIdx.y * blockDim.x + threadIdx.x; // thread index within a block
-int warpId = threadBlockIdx >> 5; // Id of the warp within a block
-int laneId = threadBlockIdx & 31; // Within a warp the id of a thread
-
-int slabRowIdx = laneId >> 3; // Among the 4 rows in a slab which one the thread is assigned to
-int slabColIdx = laneId & 7; // among the 8 columns in a slab which one is the thread assigned to
+                       int threadRowGlobalOriginB, int threadColGlobalOriginB,
+                       int slabDimRows, int slabDimCols,
+                       int warpRowGroup, int warpsPerColGroup,
+                       int slabRowIdx,
+                       int colTile, int newColTile){
 
  
 
-for (int slabNum = warpId; slabNum < totalSlabs; slabNum += numWarps){ // loop over all slabs
-    int slabRowStart = slabNum / slabDimCols; // map back to the starting row of tile for that slab
-    int slabColStart = slabNum % slabDimCols; // map back to starting col of tile for that slab
+for (int slabRowStart = warpRowGroup; slabRowStart < slabDimRows; slabRowStart += warpsPerColGroup){ // loop over all slabs
     int rowTile = 4 * slabRowStart + slabRowIdx; // tells us which row of the tile the thread is working on
-    int colTile = 32 * slabColStart + 4 * slabColIdx; // tells us which col of the tile the thread is starting on
 
     //Load in A
     int rowA = threadRowGlobalOriginA + rowTile;
@@ -239,11 +230,6 @@ for (int slabNum = warpId; slabNum < totalSlabs; slabNum += numWarps){ // loop o
     int rowB = threadRowGlobalOriginB + rowTile;
     int colB = threadColGlobalOriginB + colTile;
     int idxB = rowB * N +  colB;
-
-    int shared_segment = colTile >> 5;
-    int shared_bank_idx = colTile & 31;
-    int new_shared_bank_idx = (shared_segment + shared_bank_idx) & 31;
-    int newColTile = (shared_segment << 5) + new_shared_bank_idx;
 
 
     if (rowB < K && colB + 3 < N && ((idxB & 3) == 0)){
@@ -329,7 +315,8 @@ struct LoaderSlab {
         int startRow, int startCol,
         int threadRowTile, int threadColTile,
         int threadRowGlobalOriginA, int threadColGlobalOriginA,
-        int threadRowGlobalOriginB, int threadColGlobalOriginB
+        int threadRowGlobalOriginB, int threadColGlobalOriginB,
+        int warpId, int totalSlabs, int numWarps, int slabRowIdx, int slabColIdx, int slabDimCols
     ) {
         load_subtile_slab(
             A, ATile, B, BTile,
@@ -337,7 +324,8 @@ struct LoaderSlab {
             startRow, startCol,
             threadRowTile, threadColTile,
             threadRowGlobalOriginA, threadColGlobalOriginA,
-            threadRowGlobalOriginB, threadColGlobalOriginB
+            threadRowGlobalOriginB, threadColGlobalOriginB,
+            warpId, totalSlabs, numWarps, slabRowIdx, slabColIdx, slabDimCols
         );
     }
 };
@@ -357,7 +345,11 @@ struct LoaderSwzl {
         int startRow, int startCol,
         int threadRowTile, int threadColTile,
         int threadRowGlobalOriginA, int threadColGlobalOriginA,
-        int threadRowGlobalOriginB, int threadColGlobalOriginB
+        int threadRowGlobalOriginB, int threadColGlobalOriginB,
+        int slabDimRows, int slabDimCols,
+        int warpRowGroup, int warpsPerColGroup,
+        int slabRowIdx,
+        int colTile, int newColTile
     ) {
         load_subtile_slab_swizzle(
             A, ATile, B, BTile,
@@ -365,7 +357,11 @@ struct LoaderSwzl {
             startRow, startCol,
             threadRowTile, threadColTile,
             threadRowGlobalOriginA, threadColGlobalOriginA,
-            threadRowGlobalOriginB, threadColGlobalOriginB
+            threadRowGlobalOriginB, threadColGlobalOriginB,
+            slabDimRows, slabDimCols,
+            warpRowGroup, warpsPerColGroup,
+            slabRowIdx,
+            colTile, newColTile
         );
     }
 };

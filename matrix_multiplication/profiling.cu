@@ -13,6 +13,7 @@
 
 
 
+
 #define CHECK_CUDA(call) do {                                   \
   cudaError_t err = (call);                                     \
   if (err != cudaSuccess) {                                     \
@@ -45,11 +46,21 @@ static void verifyGEMM_small(const float *A, const float *B,
     }
 }
 
-int main() {
+void parseArgs(int argc, char** argv, Config& config);
+void set_block_and_grid(dim3& block, dim3& grid, Config& config, int M, int N);
+void launch_kernel(int M,int N,int K,
+                                 float alpha,
+                                 const float* __restrict__ A,
+                                 const float* __restrict__ B,
+                                 float beta,
+                                 float* __restrict__ C,  dim3& grid, dim3& block, Config& config);
 
+int main(int argc, char** argv) {
+    static_assert(SUBTILE % (SUB * SUB) == 0, "SUB^2 must divide SUBTILE");
+    Config config;
+    parseArgs(argc, argv, config);
     
-    // ---------- choose what to profile (change ONE line) ----------
-    auto Kernel = GEMMSubtileFinal;   // GEMMBaseline, GEMMTiling, or GEMMSubtileFinal
+    
 
     // ---------- basic config sanity ----------
     assert(SUBTILE % SUB == 0);
@@ -86,22 +97,9 @@ int main() {
 
         dim3 block, grid;
 
-        // Launch dims:
-        // - Baseline/Tiling often use TILE x TILE threads
-        // - SubtileFinal uses (SUBTILE/SUB) x (SUBTILE/SUB) threads
-        //
-        // To keep this file simple, we pick:
-        //   - if profiling subtile: use SUBTILE/SUB
-        //   - else: use TILE (common)
-        if (Kernel == GEMMSubtileFinal) {
-            block = dim3(SUBTILE / SUB, SUBTILE / SUB, 1);
-            grid  = dim3((N + SUBTILE - 1)/SUBTILE, (M + SUBTILE - 1)/SUBTILE, 1);
-        } else {
-            block = dim3(TILE, TILE, 1);
-            grid  = dim3((N + TILE - 1)/TILE, (M + TILE - 1)/TILE, 1);
-        }
+        set_block_and_grid(block, grid, config, M, N);
 
-        Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        launch_kernel(M, N, K, alpha, dA, dB, beta, dC, grid, block, config);
         CHECK_CUDA(cudaGetLastError());
         CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -136,16 +134,11 @@ int main() {
         CHECK_CUDA(cudaMemcpy(dC, C.data(), sizeof(float)*M*N, cudaMemcpyHostToDevice));
 
         dim3 block, grid;
-        if (Kernel == GEMMSubtileFinal) {
-            block = dim3(SUBTILE / SUB, SUBTILE / SUB, 1);
-            grid  = dim3((N + SUBTILE - 1)/SUBTILE, (M + SUBTILE - 1)/SUBTILE, 1);
-        } else {
-            block = dim3(TILE, TILE, 1);
-            grid  = dim3((N + TILE - 1)/TILE, (M + TILE - 1)/TILE, 1);
-        }
+        set_block_and_grid(block, grid, config, M, N);
 
         // 1. Warmup
-        Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        launch_kernel(M, N, K, alpha, dA, dB, beta, dC, grid, block, config);
+        // Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
         CHECK_CUDA(cudaDeviceSynchronize());
 
         // 2. Instrument with CUDA Events
@@ -156,7 +149,7 @@ int main() {
         CHECK_CUDA(cudaProfilerStart());
         CHECK_CUDA(cudaEventRecord(start));
         
-        Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        launch_kernel(M, N, K, alpha, dA, dB, beta, dC, grid, block, config);
         
         CHECK_CUDA(cudaEventRecord(stop));
         CHECK_CUDA(cudaProfilerStop());
@@ -194,4 +187,55 @@ int main() {
     }
 
     return 0;
+}
+
+
+void parseArgs(int argc, char** argv, Config& config){
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--kernel" && i + 1 < argc){
+            config.kernel_type = argv[++i];
+
+        }
+}
+}
+
+void set_block_and_grid(dim3& block, dim3& grid, Config& config, int M, int N){
+    if (config.kernel_type == "baseline" || config.kernel_type == "tiling") {
+            block = dim3(TILE, TILE, 1);
+            grid  = dim3((N + TILE - 1)/TILE, (M + TILE - 1)/TILE, 1);     
+        } else {
+            block = dim3(SUBTILE / SUB, SUBTILE / SUB, 1);
+            grid  = dim3((N + SUBTILE - 1)/SUBTILE, (M + SUBTILE - 1)/SUBTILE, 1);
+        }
+}
+
+void launch_kernel(int M,int N,int K,
+                                 float alpha,
+                                 const float* __restrict__ dA,
+                                 const float* __restrict__ dB,
+                                 float beta,
+                                 float* __restrict__ dC, dim3& grid, dim3& block, Config& config)
+{
+    if (config.kernel_type == "baseline"){
+        GEMMBaseline<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
+    else if (config.kernel_type == "tiling"){
+        GEMMTiling<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
+    else if (config.kernel_type == "registernaive"){
+        GEMMSubtileRegNaive<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
+    else if (config.kernel_type == "registervec4"){
+        GEMMSubtileRegVec4<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
+    else if (config.kernel_type == "warpslab"){
+        GEMMSubtileWarpSlab<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
+    else if (config.kernel_type == "swizzle"){
+        GEMMSubtileSwzl<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
+    else{
+        throw std::runtime_error("Unknown kernel_type");
+    }
 }

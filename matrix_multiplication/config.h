@@ -18,3 +18,10 @@
 #ifndef SWZ_SHIFT
 #define SWZ_SHIFT 2     // XOR by 4 columns (float4-friendly)
 #endif
+
+#include <string>
+
+struct Config{
+    std::string kernel_type = "warp slab";
+
+};
