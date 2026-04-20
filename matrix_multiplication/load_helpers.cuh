@@ -1,6 +1,7 @@
 #pragma once
 #include <cuda_runtime.h>
 #include "config.h"
+#include "param_init.cuh"
 
 __device__ __forceinline__
 void load_subtile_naive(const float* __restrict__ A,
@@ -35,7 +36,27 @@ void load_subtile_naive(const float* __restrict__ A,
 }
 
 
-// Vectorized version (float4 loads)
+__device__ __forceinline__
+void load_vec4_or_scalar_to_shared(const float* __restrict__ src,
+                                   int row, int col, int ld,
+                                   int rowBound, int colBound,
+                                   float* dst, int dstCol)
+{
+    int idx = row * ld + col;
+
+    if (row < rowBound && col + 3 < colBound && ((idx & 3) == 0)) {
+        float4 tmp = reinterpret_cast<const float4*>(&src[idx])[0];
+        dst[dstCol + 0] = tmp.x;
+        dst[dstCol + 1] = tmp.y;
+        dst[dstCol + 2] = tmp.z;
+        dst[dstCol + 3] = tmp.w;
+    } else {
+        dst[dstCol + 0] = (row < rowBound && col + 0 < colBound) ? src[idx + 0] : 0.0f;
+        dst[dstCol + 1] = (row < rowBound && col + 1 < colBound) ? src[idx + 1] : 0.0f;
+        dst[dstCol + 2] = (row < rowBound && col + 2 < colBound) ? src[idx + 2] : 0.0f;
+        dst[dstCol + 3] = (row < rowBound && col + 3 < colBound) ? src[idx + 3] : 0.0f;
+    }
+}
 
 __device__ __forceinline__
 void load_subtile_vec4(const float* __restrict__ A,
@@ -43,60 +64,30 @@ void load_subtile_vec4(const float* __restrict__ A,
                        const float* __restrict__ B,
                        float BTile[SUBTILE][SUBTILE+1],
                        int M, int K, int N,
-                       int startRow, int startCol,
-                       int threadRowTile, int threadColTile,
                        int threadRowGlobalOriginA, int threadColGlobalOriginA,
-                       int threadRowGlobalOriginB, int threadColGlobalOriginB)
+                       int threadRowGlobalOriginB, int threadColGlobalOriginB,
+                       const NaiveParams& params)
 {
 
     #pragma unroll
     for (int i = 0; i < SUB; i++){
-        int rowTile = threadRowTile + i;
+        int rowTile = params.threadRowTile + i;
         int rowA = threadRowGlobalOriginA + rowTile;
         int rowB = threadRowGlobalOriginB + rowTile;
 
         
         #pragma unroll
         for (int j = 0; j < SUB; j+=4){
-            int colTile = threadColTile + j;
+            int colTile = params.threadColTile + j;
             int colA = threadColGlobalOriginA + colTile;
             int colB = threadColGlobalOriginB + colTile;
 
-            
+        
+            load_vec4_or_scalar_to_shared(A, rowA, colA, K,
+                                   M, K, &ATile[rowTile][0], colTile);
+            load_vec4_or_scalar_to_shared(B, rowB, colB, N,
+                                   K, N, &BTile[rowTile][0], colTile);
 
-            //Prefer the floa4 load when possible
-            int idxA = rowA * K + colA;
-            if (rowA < M && colA + 3 < K && ((idxA & 3) == 0)){
-                float4 tmpA = reinterpret_cast<const float4*>(&A[rowA * K + colA])[0];
-                ATile[rowTile][colTile + 0] = tmpA.x;
-                ATile[rowTile][colTile + 1] = tmpA.y;
-                ATile[rowTile][colTile + 2] = tmpA.z;
-                ATile[rowTile][colTile + 3] = tmpA.w;
-            } 
-            //Otherwise fall back to scalar loads
-            else {
-                #pragma unroll
-                for (int k =0; k < 4; k++){
-                    int colAGlobal = colA + k;
-                    ATile[rowTile][colTile + k] =
-                        (rowA < M && colAGlobal < K) ? A[rowA * K + colAGlobal] : 0.0f;
-                }
-            }
-            int idxB = rowB * N + colB;
-            if (rowB < K && colB + 3 < N && ((idxB & 3) == 0)){
-                float4 tmpB = reinterpret_cast<const float4*>(&B[rowB * N +  colB])[0];
-                BTile[rowTile][colTile + 0] = tmpB.x;
-                BTile[rowTile][colTile + 1] = tmpB.y;
-                BTile[rowTile][colTile + 2] = tmpB.z;
-                BTile[rowTile][colTile + 3] = tmpB.w;
-            } else {
-                #pragma unroll
-                for (int k =0; k < 4; k++){
-                    int colBGlobal = colB + k;
-                    BTile[rowTile][colTile + k] =
-                        (rowB < K && colBGlobal < N) ? B[rowB * N + colBGlobal] : 0.0f;
-                }
-            }
     
         }
     }
@@ -109,73 +100,33 @@ void load_subtile_slab(const float* __restrict__ A,
                        const float* __restrict__ B,
                        float BTile[SUBTILE][SUBTILE+1],
                        int M, int K, int N,
-                       int startRow, int startCol,
-                       int threadRowTile, int threadColTile,
                        int threadRowGlobalOriginA, int threadColGlobalOriginA,
                        int threadRowGlobalOriginB, int threadColGlobalOriginB,
-                       int warpId, int totalSlabs, int numWarps, int slabRowIdx, int slabColIdx, int slabDimCols)
+                       const SlabParams& params)
 {
-// int slabDimRows = (SUBTILE + 3) >> 2; // num of slabs that fit vertically within tile
-// int slabDimCols = (SUBTILE + 31) >> 5;  // num of slabs that fit horizontally within tile
-// int totalSlabs =  slabDimRows * slabDimCols;
 
-// int numWarps = blockDim.x * blockDim.y >> 5; // num of warps within a block
 
-// int threadBlockIdx = threadIdx.y * blockDim.x + threadIdx.x; // thread index within a block
-// int warpId = threadBlockIdx >> 5; // Id of the warp within a block
-// int laneId = threadBlockIdx & 31; // Within a warp the id of a thread
-
-// int slabRowIdx = laneId >> 3; // Among the 4 rows in a slab which one the thread is assigned to
-// int slabColIdx = laneId & 7; // among the 8 columns in a slab which one is the thread assigned to
-
- 
-
-for (int slabNum = warpId; slabNum < totalSlabs; slabNum += numWarps){ // loop over all slabs
-    int slabRowStart = slabNum / slabDimCols; // map back to the starting row of tile for that slab
-    int slabColStart = slabNum % slabDimCols; // map back to starting col of tile for that slab
-    int rowTile = 4 * slabRowStart + slabRowIdx; // tells us which row of the tile the thread is working on
-    int colTile = 32 * slabColStart + 4 * slabColIdx; // tells us which col of the tile the thread is starting on
+for (int slabNum = params.warpId; slabNum < params.totalSlabs; slabNum += params.numWarps){ // loop over all slabs
+    int slabRowStart = slabNum / params.slabDimCols; // map back to the starting row of tile for that slab
+    int slabColStart = slabNum % params.slabDimCols; // map back to starting col of tile for that slab
+    int rowTile = 4 * slabRowStart +params. slabRowIdx; // tells us which row of the tile the thread is working on
+    int colTile = 32 * slabColStart + 4 * params.slabColIdx; // tells us which col of the tile the thread is starting on
 
     //Load in A
     int rowA = threadRowGlobalOriginA + rowTile;
     int colA = threadColGlobalOriginA + colTile;
-    int idxA = rowA * K + colA;
-    if (rowA < M && colA + 3 < K && ((idxA & 3) == 0)){
-                float4 tmpA = reinterpret_cast<const float4*>(&A[idxA])[0];
-                ATile[rowTile][colTile + 0] = tmpA.x;
-                ATile[rowTile][colTile + 1] = tmpA.y;
-                ATile[rowTile][colTile + 2] = tmpA.z;
-                ATile[rowTile][colTile + 3] = tmpA.w;
-            } 
-    //Otherwise fall back to scalar loads
-    else {
-        #pragma unroll
-        for (int k =0; k < 4; k++){
-            int colAGlobal = colA + k;
-            ATile[rowTile][colTile + k] =
-                (rowA < M && colAGlobal < K) ? A[rowA * K + colAGlobal] : 0.0f;
-        }
-    }
+
+    load_vec4_or_scalar_to_shared(A, rowA, colA, K,
+                                   M, K, &ATile[rowTile][0], colTile);
+
 
 
     //Load in B
     int rowB = threadRowGlobalOriginB + rowTile;
     int colB = threadColGlobalOriginB + colTile;
-    int idxB = rowB * N +  colB;
-    if (rowB < K && colB + 3 < N && ((idxB & 3) == 0)){
-                float4 tmpB = reinterpret_cast<const float4*>(&B[idxB])[0];
-                BTile[rowTile][colTile + 0] = tmpB.x;
-                BTile[rowTile][colTile + 1] = tmpB.y;
-                BTile[rowTile][colTile + 2] = tmpB.z;
-                BTile[rowTile][colTile + 3] = tmpB.w;
-            } else {
-                #pragma unroll
-                for (int k =0; k < 4; k++){
-                    int colBGlobal = colB + k;
-                    BTile[rowTile][colTile + k] =
-                        (rowB < K && colBGlobal < N) ? B[rowB * N + colBGlobal] : 0.0f;
-                }
-            }
+    load_vec4_or_scalar_to_shared(B, rowB, colB, N,
+                                   K, N, &BTile[rowTile][0], colTile);
+    
 }
 
 
@@ -190,62 +141,27 @@ void load_subtile_slab_swizzle(const float* __restrict__ A,
                        const float* __restrict__ B,
                        float BTile[SUBTILE][SUBTILE+1],
                        int M, int K, int N,
-                       int startRow, int startCol,
-                       int threadRowTile, int threadColTile,
                        int threadRowGlobalOriginA, int threadColGlobalOriginA,
                        int threadRowGlobalOriginB, int threadColGlobalOriginB,
-                       int slabDimRows, int slabDimCols,
-                       int warpRowGroup, int warpsPerColGroup,
-                       int slabRowIdx,
-                       int colTile, int newColTile){
+                       const SwizzleParams& params){
 
  
 
-for (int slabRowStart = warpRowGroup; slabRowStart < slabDimRows; slabRowStart += warpsPerColGroup){ // loop over all slabs
-    int rowTile = 4 * slabRowStart + slabRowIdx; // tells us which row of the tile the thread is working on
+for (int slabRowStart = params.warpRowGroup; slabRowStart < params.slabDimRows; slabRowStart += params.warpsPerColGroup){ // loop over all slabs
+    int rowTile = 4 * slabRowStart + params.slabRowIdx; // tells us which row of the tile the thread is working on
 
     //Load in A
     int rowA = threadRowGlobalOriginA + rowTile;
-    int colA = threadColGlobalOriginA + colTile;
-    int idxA = rowA * K + colA;
-    if (rowA < M && colA + 3 < K && ((idxA & 3) == 0)){
-                float4 tmpA = reinterpret_cast<const float4*>(&A[idxA])[0];
-                ATile[rowTile][colTile + 0] = tmpA.x;
-                ATile[rowTile][colTile + 1] = tmpA.y;
-                ATile[rowTile][colTile + 2] = tmpA.z;
-                ATile[rowTile][colTile + 3] = tmpA.w;
-            } 
-    //Otherwise fall back to scalar loads
-    else {
-        #pragma unroll
-        for (int k =0; k < 4; k++){
-            int colAGlobal = colA + k;
-            ATile[rowTile][colTile + k] =
-                (rowA < M && colAGlobal < K) ? A[rowA * K + colAGlobal] : 0.0f;
-        }
-    }
+    int colA = threadColGlobalOriginA + params.colTile;
+    load_vec4_or_scalar_to_shared(A, rowA, colA, K,
+                                   M, K, &ATile[rowTile][0], params.colTile);
 
 
     //Load in B
     int rowB = threadRowGlobalOriginB + rowTile;
-    int colB = threadColGlobalOriginB + colTile;
-    int idxB = rowB * N +  colB;
-
-
-    if (rowB < K && colB + 3 < N && ((idxB & 3) == 0)){
-                float4 tmpB = reinterpret_cast<const float4*>(&B[idxB])[0];
-                BTile[rowTile][newColTile + 0] = tmpB.x;
-                BTile[rowTile][newColTile + 1] = tmpB.y;
-                BTile[rowTile][newColTile + 2] = tmpB.z;
-                BTile[rowTile][newColTile + 3] = tmpB.w;
-            } else {
-                #pragma unroll
-                for (int k =0; k < 4; k++){
-                    int colBGlobal = colB + k;
-                    BTile[rowTile][newColTile+ k] =
-                        (rowB < K && colBGlobal < N) ? B[rowB * N + colBGlobal] : 0.0f;
-                }
-            }
+    int colB = threadColGlobalOriginB + params.colTile;
+    load_vec4_or_scalar_to_shared(B, rowB, colB, N,
+                                   K, N, &BTile[rowTile][0], params.newColTile);
 }
 
 
@@ -254,116 +170,79 @@ for (int slabRowStart = warpRowGroup; slabRowStart < slabDimRows; slabRowStart +
 
 
 
-struct LoaderNaive {
-    __device__ __forceinline__
-    static void run(
-        const float* __restrict__ A,
-        float ATile[SUBTILE][SUBTILE+1],
-        const float* __restrict__ B,
-        float BTile[SUBTILE][SUBTILE+1],
-        int M, int K, int N,
-        int startRow, int startCol,
-        int threadRowTile, int threadColTile,
-        int threadRowGlobalOriginA, int threadColGlobalOriginA,
-        int threadRowGlobalOriginB, int threadColGlobalOriginB
-    ) {
-        load_subtile_naive(
-            A, ATile, B, BTile,
-            M, K, N,
-            startRow, startCol,
-            threadRowTile, threadColTile,
-            threadRowGlobalOriginA, threadColGlobalOriginA,
-            threadRowGlobalOriginB, threadColGlobalOriginB
-        );
-    }
-};
+__device__ __forceinline__
+void load_with_params(const NaiveParams& params,
+                      const float* __restrict__ A,
+                      float ATile[SUBTILE][SUBTILE+1],
+                      const float* __restrict__ B,
+                      float BTile[SUBTILE][SUBTILE+1],
+                      int M, int K, int N,
+                      int startRow, int startCol,
+                      int chunk)
+{
+    int threadRowGlobalOriginA = startRow;
+    int threadColGlobalOriginA = chunk;
+
+    int threadRowGlobalOriginB = chunk;
+    int threadColGlobalOriginB = startCol;
+
+    load_subtile_vec4(
+        A, ATile, B, BTile,
+        M, K, N,
+        threadRowGlobalOriginA, threadColGlobalOriginA,
+        threadRowGlobalOriginB, threadColGlobalOriginB,
+        params
+    );
+}
 
 
-struct LoaderVec4 {
-    __device__ __forceinline__
-    static void run(
-        const float* __restrict__ A,
-        float ATile[SUBTILE][SUBTILE+1],
-        const float* __restrict__ B,
-        float BTile[SUBTILE][SUBTILE+1],
-        int M, int K, int N,
-        int startRow, int startCol,
-        int threadRowTile, int threadColTile,
-        int threadRowGlobalOriginA, int threadColGlobalOriginA,
-        int threadRowGlobalOriginB, int threadColGlobalOriginB
-    ) {
-        load_subtile_vec4(
-            A, ATile, B, BTile,
-            M, K, N,
-            startRow, startCol,
-            threadRowTile, threadColTile,
-            threadRowGlobalOriginA, threadColGlobalOriginA,
-            threadRowGlobalOriginB, threadColGlobalOriginB
-        );
-    }
-};
+__device__ __forceinline__
+void load_with_params(const SlabParams& params,
+                      const float* __restrict__ A,
+                      float ATile[SUBTILE][SUBTILE+1],
+                      const float* __restrict__ B,
+                      float BTile[SUBTILE][SUBTILE+1],
+                      int M, int K, int N,
+                      int startRow, int startCol,
+                      int chunk)
+{
+    int threadRowGlobalOriginA = startRow;
+    int threadColGlobalOriginA = chunk;
+
+    int threadRowGlobalOriginB = chunk;
+    int threadColGlobalOriginB = startCol;
+
+    load_subtile_slab(
+        A, ATile, B, BTile,
+        M, K, N,
+        threadRowGlobalOriginA, threadColGlobalOriginA,
+        threadRowGlobalOriginB, threadColGlobalOriginB,
+        params
+    );
+}
 
 
-struct LoaderSlab {
-    __device__ __forceinline__
-    static void run(
-        const float* __restrict__ A,
-        float ATile[SUBTILE][SUBTILE+1],
-        const float* __restrict__ B,
-        float BTile[SUBTILE][SUBTILE+1],
-        int M, int K, int N,
-        int startRow, int startCol,
-        int threadRowTile, int threadColTile,
-        int threadRowGlobalOriginA, int threadColGlobalOriginA,
-        int threadRowGlobalOriginB, int threadColGlobalOriginB,
-        int warpId, int totalSlabs, int numWarps, int slabRowIdx, int slabColIdx, int slabDimCols
-    ) {
-        load_subtile_slab(
-            A, ATile, B, BTile,
-            M, K, N,
-            startRow, startCol,
-            threadRowTile, threadColTile,
-            threadRowGlobalOriginA, threadColGlobalOriginA,
-            threadRowGlobalOriginB, threadColGlobalOriginB,
-            warpId, totalSlabs, numWarps, slabRowIdx, slabColIdx, slabDimCols
-        );
-    }
-};
+__device__ __forceinline__
+void load_with_params(const SwizzleParams& params,
+                      const float* __restrict__ A,
+                      float ATile[SUBTILE][SUBTILE+1],
+                      const float* __restrict__ B,
+                      float BTile[SUBTILE][SUBTILE+1],
+                      int M, int K, int N,
+                      int startRow, int startCol,
+                      int chunk)
+{
+    int threadRowGlobalOriginA = startRow;
+    int threadColGlobalOriginA = chunk;
 
+    int threadRowGlobalOriginB = chunk;
+    int threadColGlobalOriginB = startCol;
 
-
-
-
-struct LoaderSwzl {
-    __device__ __forceinline__
-    static void run(
-        const float* __restrict__ A,
-        float ATile[SUBTILE][SUBTILE+1],
-        const float* __restrict__ B,
-        float BTile[SUBTILE][SUBTILE+1],
-        int M, int K, int N,
-        int startRow, int startCol,
-        int threadRowTile, int threadColTile,
-        int threadRowGlobalOriginA, int threadColGlobalOriginA,
-        int threadRowGlobalOriginB, int threadColGlobalOriginB,
-        int slabDimRows, int slabDimCols,
-        int warpRowGroup, int warpsPerColGroup,
-        int slabRowIdx,
-        int colTile, int newColTile
-    ) {
-        load_subtile_slab_swizzle(
-            A, ATile, B, BTile,
-            M, K, N,
-            startRow, startCol,
-            threadRowTile, threadColTile,
-            threadRowGlobalOriginA, threadColGlobalOriginA,
-            threadRowGlobalOriginB, threadColGlobalOriginB,
-            slabDimRows, slabDimCols,
-            warpRowGroup, warpsPerColGroup,
-            slabRowIdx,
-            colTile, newColTile
-        );
-    }
-};
-
-
+    load_subtile_slab_swizzle(
+        A, ATile, B, BTile,
+        M, K, N,
+        threadRowGlobalOriginA, threadColGlobalOriginA,
+        threadRowGlobalOriginB, threadColGlobalOriginB,
+        params
+    );
+}

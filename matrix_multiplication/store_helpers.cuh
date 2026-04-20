@@ -129,37 +129,3 @@ void store_subtile_vec4(float sum[SUB][SUB],
         }
     }
 }
-
-
-
-struct StoreScalar {
-    __device__ __forceinline__
-    static void run(
-        float sum[SUB][SUB],
-        float*  __restrict__ C, int M, int N, 
-        int startRow, int startCol,
-        int threadRowTile, int threadColTile,
-        float alpha, float beta
-    ) {
-        store_subtile_scalar(
-            sum, C, M, N, startRow, startCol,
-            threadRowTile, threadColTile, alpha, beta
-        );
-    }
-};
-
-struct StoreVec4 {
-    __device__ __forceinline__
-    static void run(
-        float sum[SUB][SUB],
-        float*  __restrict__ C, int M, int N, 
-        int startRow, int startCol,
-        int threadRowTile, int threadColTile,
-        float alpha, float beta
-    ) {
-        store_subtile_vec4(
-            sum, C, M, N, startRow, startCol,
-            threadRowTile, threadColTile, alpha, beta
-        );
-    }
-};

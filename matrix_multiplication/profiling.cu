@@ -223,17 +223,17 @@ void launch_kernel(int M,int N,int K,
     else if (config.kernel_type == "tiling"){
         GEMMTiling<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
-    else if (config.kernel_type == "registernaive"){
-        GEMMSubtileRegNaive<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
-    }
+    // else if (config.kernel_type == "registernaive"){
+    //     GEMMSubtileRegNaive<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    // }
     else if (config.kernel_type == "registervec4"){
-        GEMMSubtileRegVec4<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        GEMMSubTiling<NaiveParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
     else if (config.kernel_type == "warpslab"){
-        GEMMSubtileWarpSlab<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        GEMMSubTiling<SlabParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
     else if (config.kernel_type == "swizzle"){
-        GEMMSubtileSwzl<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        GEMMSubTiling<SwizzleParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
     else{
         throw std::runtime_error("Unknown kernel_type");

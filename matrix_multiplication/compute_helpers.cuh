@@ -2,12 +2,14 @@
 #pragma once
 #include <cuda_runtime.h>
 #include "config.h"
+#include "param_init.cuh"
 
+template <typename Params>
 __device__ __forceinline__
-void compute_subtile_naive(const float ATile[SUBTILE][SUBTILE+1],
+void compute_subtile(const float ATile[SUBTILE][SUBTILE+1],
                      const float BTile[SUBTILE][SUBTILE+1],
                      int K, int kmax,
-                     float sum[SUB][SUB], int threadRowTile, int threadColTile)
+                     float sum[SUB][SUB], const Params& params)
 {
               
     #pragma unroll
@@ -16,11 +18,11 @@ void compute_subtile_naive(const float ATile[SUBTILE][SUBTILE+1],
         float BReg[SUB];
         #pragma unroll
         for (int i=0; i < SUB; i++){
-            AReg[i] = ATile[threadRowTile + i][k];
+            AReg[i] = ATile[params.threadRowTile + i][k];
         }
         #pragma unroll
         for (int j=0; j < SUB; j++){
-            BReg[j] = BTile[k][threadColTile + j];
+            BReg[j] = BTile[k][params.computeColTile + j];
         }
 
         #pragma unroll
@@ -38,23 +40,5 @@ void compute_subtile_naive(const float ATile[SUBTILE][SUBTILE+1],
 
 
 
-struct ComputeNaive {
-    __device__ __forceinline__
-    static void run(
-        const float ATile[SUBTILE][SUBTILE+1],
-        const float BTile[SUBTILE][SUBTILE+1],
-        int K, int kmax,
-        float sum[SUB][SUB],
-        int threadRowTile, int threadColTile
-    ) {
-        compute_subtile_naive(
-            ATile, BTile,
-            K,
-            kmax,
-            sum,
-            threadRowTile, threadColTile
-        );
-    }
-};
 
 
