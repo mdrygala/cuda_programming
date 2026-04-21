@@ -22,6 +22,6 @@
 #include <string>
 
 struct Config{
-    std::string kernel_type = "warp slab";
+    std::string kernel_type = "warpslab";
 
 };

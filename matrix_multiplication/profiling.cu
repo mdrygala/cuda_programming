@@ -55,6 +55,7 @@ void launch_kernel(int M,int N,int K,
                                  float beta,
                                  float* __restrict__ C,  dim3& grid, dim3& block, Config& config);
 
+
 int main(int argc, char** argv) {
     static_assert(SUBTILE % (SUB * SUB) == 0, "SUB^2 must divide SUBTILE");
     Config config;
@@ -135,6 +136,7 @@ int main(int argc, char** argv) {
 
         dim3 block, grid;
         set_block_and_grid(block, grid, config, M, N);
+        
 
         // 1. Warmup
         launch_kernel(M, N, K, alpha, dA, dB, beta, dC, grid, block, config);
@@ -235,7 +237,13 @@ void launch_kernel(int M,int N,int K,
     else if (config.kernel_type == "swizzle"){
         GEMMSubTiling<SwizzleParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
+    else if (config.kernel_type == "fakeswizzle"){
+        GEMMSubTiling<FakeSwizzleParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
     else{
         throw std::runtime_error("Unknown kernel_type");
     }
 }
+
+
+
