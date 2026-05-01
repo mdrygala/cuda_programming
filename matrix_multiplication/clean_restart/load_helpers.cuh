@@ -56,7 +56,7 @@ for (int slabRowStart = params.warpRowGroup; slabRowStart < params.slabDimRows; 
     int rowB = threadRowGlobalOriginB + rowTile;
     int colB = threadColGlobalOriginB + params.colTile;
     load_vec4_or_scalar_to_shared(B, rowB, colB, N,
-                                   K, N, &BTile[rowTile][0], params.newColTile);
+                                   K, N, &BTile[rowTile][0], params.colTile);
 }
 
 

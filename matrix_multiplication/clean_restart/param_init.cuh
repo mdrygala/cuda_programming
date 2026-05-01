@@ -16,7 +16,7 @@ struct FakeSwizzleParams {
     int slabRowIdx;
 
     int colTile;
-    int newColTile;
+    // int newColTile;
 };
 
 
@@ -50,14 +50,14 @@ FakeSwizzleParams make_fake_swizzle_params()
     params.colTile = 32 * warpColGroup + 4 * slabColIdx;
     
 
-    int shared_segment = params.colTile >> 5;
-    int shared_bank_idx = params.colTile & 31;
-    int new_shared_bank_idx = (shared_segment + shared_bank_idx) & 31;
-    params.newColTile = (shared_segment << 5) + new_shared_bank_idx;
+    // int shared_segment = params.colTile >> 5;
+    // int shared_bank_idx = params.colTile & 31;
+    // int new_shared_bank_idx = (shared_segment + shared_bank_idx) & 31;
+    // params.newColTile = (shared_segment << 5) + new_shared_bank_idx;
 
-    params.newColTile = params.colTile;
+    // params.newColTile = params.colTile;
 
-    params.computeColTile = params.newColTile;
+    // params.computeColTile = params.newColTile;
 
     return params;
 }
