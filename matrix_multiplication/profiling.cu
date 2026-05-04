@@ -9,7 +9,7 @@
 #include <iostream>
 
 #include "config.h"
-#include "kernels.cuh"
+#include "kernels/kernels.cuh"
 
 
 
@@ -117,9 +117,11 @@ int main(int argc, char** argv) {
    
     // ---------- 2) PROFILE ON LARGE (ONLY THIS REGION) ----------
     {
-        int N = 1 << 11;
+        int N = 1 << 12;
         int M = N, K = N;
-        float alpha = 1.0f, beta = 1.0f;
+        float alpha = 1.0f;
+        float beta = 0.0f;
+        // float beta = 1.0f;
 
         std::vector<float> A(M*K, 1.0f);
         std::vector<float> B(K*N, 1.0f);
@@ -136,11 +138,13 @@ int main(int argc, char** argv) {
 
         dim3 block, grid;
         set_block_and_grid(block, grid, config, M, N);
+        constexpr int NUM_WARMUPS = 10;
+        constexpr int NUM_REPEATS = 10;
         
-
         // 1. Warmup
-        launch_kernel(M, N, K, alpha, dA, dB, beta, dC, grid, block, config);
-        // Kernel<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        for (int i = 0; i < NUM_WARMUPS; ++i) {
+            launch_kernel(M, N, K, alpha, dA, dB, beta, dC, grid, block, config);
+        }
         CHECK_CUDA(cudaDeviceSynchronize());
 
         // 2. Instrument with CUDA Events
@@ -151,14 +155,17 @@ int main(int argc, char** argv) {
         CHECK_CUDA(cudaProfilerStart());
         CHECK_CUDA(cudaEventRecord(start));
         
-        launch_kernel(M, N, K, alpha, dA, dB, beta, dC, grid, block, config);
+        for (int i = 0; i < NUM_REPEATS; ++i) {
+            launch_kernel(M, N, K, alpha, dA, dB, beta, dC, grid, block, config);
+        }
         
         CHECK_CUDA(cudaEventRecord(stop));
         CHECK_CUDA(cudaProfilerStop());
 
         CHECK_CUDA(cudaEventSynchronize(stop));
-        float milliseconds = 0;
-        CHECK_CUDA(cudaEventElapsedTime(&milliseconds, start, stop));
+        float total_ms = 0;
+        CHECK_CUDA(cudaEventElapsedTime(&total_ms, start, stop));
+        float milliseconds = total_ms / NUM_REPEATS;
 
         // 3. GOODPUT MATH
         // Formula: (2 * M * N * K) / (Time in seconds)
@@ -202,14 +209,32 @@ void parseArgs(int argc, char** argv, Config& config){
 }
 }
 
-void set_block_and_grid(dim3& block, dim3& grid, Config& config, int M, int N){
+void set_block_and_grid(dim3& block, dim3& grid, Config& config, int M, int N)
+{
     if (config.kernel_type == "baseline" || config.kernel_type == "tiling") {
-            block = dim3(TILE, TILE, 1);
-            grid  = dim3((N + TILE - 1)/TILE, (M + TILE - 1)/TILE, 1);     
-        } else {
-            block = dim3(SUBTILE / SUB, SUBTILE / SUB, 1);
-            grid  = dim3((N + SUBTILE - 1)/SUBTILE, (M + SUBTILE - 1)/SUBTILE, 1);
-        }
+        block = dim3(TILE, TILE, 1);
+        grid  = dim3((N + TILE - 1) / TILE,
+                     (M + TILE - 1) / TILE,
+                     1);
+    }
+    else if (config.kernel_type == "registerscalartransposed" || config.kernel_type == "registervec4transposed") {
+        block = dim3(SUBTILE_MN / SUB,
+                     SUBTILE_MN / SUB,
+                     1);
+
+        grid  = dim3((N + SUBTILE_MN - 1) / SUBTILE_MN,
+                     (M + SUBTILE_MN - 1) / SUBTILE_MN,
+                     1);
+    }
+    else {
+        block = dim3(SUBTILE / SUB,
+                     SUBTILE / SUB,
+                     1);
+
+        grid  = dim3((N + SUBTILE - 1) / SUBTILE,
+                     (M + SUBTILE - 1) / SUBTILE,
+                     1);
+    }
 }
 
 void launch_kernel(int M,int N,int K,
@@ -225,11 +250,17 @@ void launch_kernel(int M,int N,int K,
     else if (config.kernel_type == "tiling"){
         GEMMTiling<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
-    // else if (config.kernel_type == "registernaive"){
-    //     GEMMSubtileRegNaive<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
-    // }
+    else if (config.kernel_type == "registerscalar"){
+        GEMMSubTilingScalar<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
+    else if (config.kernel_type == "registerscalartransposed"){
+        GEMMSubTilingScalarTransposed<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
     else if (config.kernel_type == "registervec4"){
-        GEMMSubTiling<NaiveParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        GEMMSubTilingVec4<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
+    else if (config.kernel_type == "registervec4transposed"){
+        GEMMSubTilingVec4Transposed<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
     else if (config.kernel_type == "warpslab"){
         GEMMSubTiling<SlabParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);

@@ -1,10 +1,11 @@
 #pragma once
 #include <cuda_runtime.h>
-#include "config.h"
-#include "param_init.cuh"
-#include "load_helpers.cuh"
-#include "compute_helpers.cuh"
-#include "store_helpers.cuh"
+#include "../config.h"
+
+#include "../param_init.cuh"
+#include "../load_helpers.cuh"
+#include "../compute_helpers.cuh"
+#include "../store_helpers.cuh"
 
 
 // Non-templated kernels (decl only)
@@ -19,7 +20,40 @@ __global__ void GEMMTiling(int M, int N, int K,
                            const float* __restrict__ A,
                            const float* __restrict__ B,
                            float beta,
-                           float* __restrict__ C);                             
+                           float* __restrict__ C);
+                           
+__global__
+void GEMMSubTilingScalar(int M, int N, int K,
+                          float alpha,
+                          const float* __restrict__ A,
+                          const float* __restrict__ B,
+                          float beta,
+                          float* __restrict__ C);
+
+__global__                          
+void GEMMSubTilingScalarTransposed(int M, int N, int K,
+                          float alpha,
+                          const float* __restrict__ A,
+                          const float* __restrict__ B,
+                          float beta,
+                          float* __restrict__ C);
+
+__global__  
+void GEMMSubTilingVec4(int M, int N, int K,
+                          float alpha,
+                          const float* __restrict__ A,
+                          const float* __restrict__ B,
+                          float beta,
+                          float* __restrict__ C);
+
+__global__
+void GEMMSubTilingVec4Transposed(int M, int N, int K,
+                          float alpha,
+                          const float* __restrict__ A,
+                          const float* __restrict__ B,
+                          float beta,
+                          float* __restrict__ C);
+                           
 
 template <typename Params>
 __global__

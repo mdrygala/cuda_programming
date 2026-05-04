@@ -7,17 +7,24 @@
 #define SUBTILE 64
 #endif
 
+#ifndef SUBTILE_MN
+#define SUBTILE_MN 64
+#endif
+
+
+#ifndef SUBTILE_K
+#define SUBTILE_K 64
+#endif
+
 #ifndef SUB
 #define SUB 4
 #endif
 
-#ifndef SWZ_MASK
-#define SWZ_MASK 1      // try 1, then 3 if needed
-#endif
+#define NUM_THREADS_X (SUBTILE_MN / SUB)
+#define NUM_THREADS_Y (SUBTILE_MN / SUB)
+#define NUM_THREADS_PER_BLOCK (NUM_THREADS_X * NUM_THREADS_Y)
+#define NUM_WARPS_PER_BLOCK (NUM_THREADS_PER_BLOCK / 32)
 
-#ifndef SWZ_SHIFT
-#define SWZ_SHIFT 2     // XOR by 4 columns (float4-friendly)
-#endif
 
 #include <string>
 
