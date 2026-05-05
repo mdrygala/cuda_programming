@@ -4,7 +4,7 @@ SUBTILE_MNS=(32 64 128)
 SUBTILE_KS=(8 16 32 64)
 SUBS=(4 8)
 
-KERNEL="registervec4transposed"
+KERNEL="warpslabtransposed"
 
 mkdir -p .build
 

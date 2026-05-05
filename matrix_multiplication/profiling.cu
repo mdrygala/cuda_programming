@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
 
         dim3 block, grid;
         set_block_and_grid(block, grid, config, M, N);
-        constexpr int NUM_WARMUPS = 10;
+        constexpr int NUM_WARMUPS = 30;
         constexpr int NUM_REPEATS = 10;
         
         // 1. Warmup
@@ -217,7 +217,11 @@ void set_block_and_grid(dim3& block, dim3& grid, Config& config, int M, int N)
                      (M + TILE - 1) / TILE,
                      1);
     }
-    else if (config.kernel_type == "registerscalartransposed" || config.kernel_type == "registervec4transposed") {
+    else if (config.kernel_type == "registerscalartransposed" ||
+             config.kernel_type == "registervec4transposed" ||
+             config.kernel_type == "warpslabtransposed"||
+             config.kernel_type == "warpslabgendim"||
+             config.kernel_type == "warpslabgendimDB") {
         block = dim3(SUBTILE_MN / SUB,
                      SUBTILE_MN / SUB,
                      1);
@@ -263,14 +267,23 @@ void launch_kernel(int M,int N,int K,
         GEMMSubTilingVec4Transposed<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
     else if (config.kernel_type == "warpslab"){
-        GEMMSubTiling<SlabParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+        GEMMSubTilingLoadSlabLinear<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
-    else if (config.kernel_type == "swizzle"){
-        GEMMSubTiling<SwizzleParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+     else if (config.kernel_type == "warpslabgendim"){
+        GEMMSubTilingLoadSlabGenDims<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
-    else if (config.kernel_type == "fakeswizzle"){
-        GEMMSubTiling<FakeSwizzleParams><<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    else if (config.kernel_type == "warpslabgendimDB"){
+        GEMMSubTilingLoadSlabGenDimsDoubleBuffered<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
     }
+    else if (config.kernel_type == "warpslabDB") {
+    GEMMSubTilingLoadSlabLinearAsync<<<grid, block>>>(
+        M, N, K, alpha, dA, dB, beta, dC
+    );
+    }
+    else if (config.kernel_type == "warpslabtransposed"){
+        GEMMSubTilingLoadSlabLinearTransposed<<<grid, block>>>(M, N, K, alpha, dA, dB, beta, dC);
+    }
+
     else{
         throw std::runtime_error("Unknown kernel_type");
     }

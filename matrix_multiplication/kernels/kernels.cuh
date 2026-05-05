@@ -53,61 +53,46 @@ void GEMMSubTilingVec4Transposed(int M, int N, int K,
                           const float* __restrict__ B,
                           float beta,
                           float* __restrict__ C);
-                           
-
-template <typename Params>
-__global__
-void GEMMSubTiling(int M, int N, int K,
+__global__                           
+void GEMMSubTilingLoadSlabLinear(int M, int N, int K,
                           float alpha,
                           const float* __restrict__ A,
                           const float* __restrict__ B,
                           float beta,
-                          float* __restrict__ C)
-{
-    __shared__ float ATile[SUBTILE][SUBTILE + 1];
-    __shared__ float BTile[SUBTILE][SUBTILE + 1];
+                          float* __restrict__ C);
+__global__                           
+void GEMMSubTilingLoadSlab2D(int M, int N, int K,
+                          float alpha,
+                          const float* __restrict__ A,
+                          const float* __restrict__ B,
+                          float beta,
+                          float* __restrict__ C);
+__global__
+void GEMMSubTilingLoadSlabLinearTransposed(int M, int N, int K,
+                                           float alpha,
+                                           const float* __restrict__ A,
+                                           const float* __restrict__ B,
+                                           float beta,
+                                           float* __restrict__ C);
 
-    int startRow = blockIdx.y * SUBTILE;
-    int startCol = blockIdx.x * SUBTILE;
-
-    Params params = make_params<Params>();
-
-    float sum[SUB][SUB];
-    #pragma unroll
-    for (int i = 0; i < SUB; i++) {
-        #pragma unroll
-        for (int j = 0; j < SUB; j++) {
-            sum[i][j] = 0.0f;
-        }
-    }
-
-    for (int chunk = 0; chunk < K; chunk += SUBTILE) {
-        load_with_params(
-            params,
-            A, ATile,
-            B, BTile,
-            M, K, N,
-            startRow, startCol,
-            chunk
-        );
-        __syncthreads();
-
-        int kmax = min(SUBTILE, K - chunk);
-        compute_subtile(
-            ATile, BTile,
-            K, kmax,
-            sum,
-            params
-        );
-        __syncthreads();
-    }
-
-    store_subtile_vec4(
-        sum, C, M, N,
-        startRow, startCol,
-        params.threadRowTile, params.threadColTile,
-        alpha, beta
-    );
-}
-
-
+__global__
+void GEMMSubTilingLoadSlabGenDims(int M, int N, int K,
+                          float alpha,
+                          const float* __restrict__ A,
+                          const float* __restrict__ B,
+                          float beta,
+                          float* __restrict__ C);
+__global__
+void GEMMSubTilingLoadSlabGenDimsDoubleBuffered(int M, int N, int K,
+                                                float alpha,
+                                                const float* __restrict__ A,
+                                                const float* __restrict__ B,
+                                                float beta,
+                                                float* __restrict__ C);
+__global__
+void GEMMSubTilingLoadSlabLinearAsync(int M, int N, int K,
+                                      float alpha,
+                                      const float* __restrict__ A,
+                                      const float* __restrict__ B,
+                                      float beta,
+                                      float* __restrict__ C);

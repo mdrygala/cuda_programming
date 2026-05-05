@@ -1,20 +1,9 @@
 #pragma once
 #include <cuda_runtime.h>
 
-struct NaiveParams{
-    int threadRowTile;
-    int threadColTile;
-    int computeColTile;
-};
-
 struct SlabParams {
     int threadRowTile;
     int threadColTile;
-    int computeColTile;
-
-    int slabDimRows;
-    int slabDimCols;
-    int totalSlabs;
 
     int numWarps;
     int warpId;
@@ -22,63 +11,15 @@ struct SlabParams {
     int slabColIdx;
 };
 
-struct SwizzleParams {
-    int threadRowTile;
-    int threadColTile;
-    int computeColTile;
-
-    int slabDimRows;
-    int slabDimCols;
-    int numWarps;
-
-    int warpRowGroup;
-    int warpsPerColGroup;
-    int slabRowIdx;
-
-    int colTile;
-    int newColTile;
-};
-
-struct FakeSwizzleParams {
-    int threadRowTile;
-    int threadColTile;
-    int computeColTile;
-
-    int slabDimRows;
-    int slabDimCols;
-    int numWarps;
-
-    int warpRowGroup;
-    int warpsPerColGroup;
-    int slabRowIdx;
-
-    int colTile;
-    int newColTile;
-};
-
 
 __device__ __forceinline__
-NaiveParams make_naive_params()
-{
-    NaiveParams params;
-    params.threadRowTile = threadIdx.y * SUB;
-    params.threadColTile = threadIdx.x * SUB;
-    params.computeColTile = params.threadColTile;
-    return params;
-}
-
-__device__ __forceinline__
-SlabParams make_slab_params()
+SlabParams make_linear_slab_params()
 {
     SlabParams params;
 
     params.threadRowTile = threadIdx.y * SUB;
     params.threadColTile = threadIdx.x * SUB;
-    params.computeColTile = params.threadColTile;
 
-    params.slabDimRows = (SUBTILE + 3) >> 2;
-    params.slabDimCols = (SUBTILE + 31) >> 5;
-    params.totalSlabs  = params.slabDimRows * params.slabDimCols;
 
     params.numWarps = (blockDim.x * blockDim.y) >> 5;
 
@@ -92,114 +33,80 @@ SlabParams make_slab_params()
     return params;
 }
 
+struct SlabParamsLinearTransposed {
+    int threadRowTile;
+    int threadColTile;
+
+    int warpId;
+    int laneId;
+    int numWarps;
+};
+
+
 __device__ __forceinline__
-SwizzleParams make_swizzle_params()
+SlabParamsLinearTransposed make_slab_params_linear_transposed()
 {
-    SwizzleParams params;
+    SlabParamsLinearTransposed params;
 
     params.threadRowTile = threadIdx.y * SUB;
     params.threadColTile = threadIdx.x * SUB;
-    
-
-    params.slabDimRows = (SUBTILE + 3) >> 2;
-    params.slabDimCols = (SUBTILE + 31) >> 5;
-    params.numWarps    = (blockDim.x * blockDim.y) >> 5;
 
     int threadBlockIdx = threadIdx.y * blockDim.x + threadIdx.x;
-    int warpId = threadBlockIdx >> 5;
-    int laneId = threadBlockIdx & 31;
 
-    int warpColGroup = warpId % params.slabDimCols;
-    params.warpRowGroup = warpId / params.slabDimCols;
-    params.warpsPerColGroup = params.numWarps / params.slabDimCols;
-
-    params.slabRowIdx = laneId >> 3;
-    int slabColIdx = laneId & 7;
-
-    params.colTile = 32 * warpColGroup + 4 * slabColIdx;
-    
-
-    int shared_segment = params.colTile >> 5;
-    int shared_bank_idx = params.colTile & 31;
-    int new_shared_bank_idx = (shared_segment + shared_bank_idx) & 31;
-    params.newColTile = (shared_segment << 5) + new_shared_bank_idx;
-
-    params.computeColTile = params.newColTile;
+    params.warpId   = threadBlockIdx >> 5;
+    params.laneId   = threadBlockIdx & 31;
+    params.numWarps = (blockDim.x * blockDim.y) >> 5;
 
     return params;
 }
 
+struct SlabParamsGenDim {
+    int threadRowTile;
+    int threadColTile;
+
+    int numWarps;
+    int warpId;
+
+    int slabRowIdxA;
+    int slabColIdxA;
+
+    int slabRowIdxB;
+    int slabColIdxB;
+};
 
 __device__ __forceinline__
-FakeSwizzleParams make_fake_swizzle_params()
+SlabParamsGenDim make_linear_slab_params_gendim()
 {
-    FakeSwizzleParams params;
+    SlabParamsGenDim params;
 
     params.threadRowTile = threadIdx.y * SUB;
     params.threadColTile = threadIdx.x * SUB;
-    
-
-    params.slabDimRows = (SUBTILE + 3) >> 2;
-    params.slabDimCols = (SUBTILE + 31) >> 5;
-    params.numWarps    = (blockDim.x * blockDim.y) >> 5;
 
     int threadBlockIdx = threadIdx.y * blockDim.x + threadIdx.x;
-    int warpId = threadBlockIdx >> 5;
     int laneId = threadBlockIdx & 31;
 
-    int warpColGroup = warpId % params.slabDimCols;
-    params.warpRowGroup = warpId / params.slabDimCols;
-    params.warpsPerColGroup = params.numWarps / params.slabDimCols;
+    params.numWarps = (blockDim.x * blockDim.y) >> 5;
+    params.warpId   = threadBlockIdx >> 5;
 
-    params.slabRowIdx = laneId >> 3;
-    int slabColIdx = laneId & 7;
+    constexpr int VEC = 4;
+    constexpr int WARP_SIZE = 32;
 
-    params.colTile = 32 * warpColGroup + 4 * slabColIdx;
-    
+    static_assert(SUBTILE_K  % VEC == 0, "SUBTILE_K must be divisible by 4");
+    static_assert(SUBTILE_MN % VEC == 0, "SUBTILE_MN must be divisible by 4");
 
-    int shared_segment = params.colTile >> 5;
-    int shared_bank_idx = params.colTile & 31;
-    int new_shared_bank_idx = (shared_segment + shared_bank_idx) & 31;
-    params.newColTile = (shared_segment << 5) + new_shared_bank_idx;
+    constexpr int A_VEC_COLS = SUBTILE_K  / VEC;
+    constexpr int B_VEC_COLS = SUBTILE_MN / VEC;
 
-    params.newColTile = params.colTile;
+    static_assert(WARP_SIZE % A_VEC_COLS == 0,
+                  "SUBTILE_K / 4 must divide 32");
+    static_assert(WARP_SIZE % B_VEC_COLS == 0,
+                  "SUBTILE_MN / 4 must divide 32");
 
-    params.computeColTile = params.newColTile;
+    params.slabRowIdxA = laneId / A_VEC_COLS;
+    params.slabColIdxA = laneId % A_VEC_COLS;
+
+    params.slabRowIdxB = laneId / B_VEC_COLS;
+    params.slabColIdxB = laneId % B_VEC_COLS;
 
     return params;
-}
-
-
-
-template <typename Params>
-__device__ __forceinline__
-Params make_params();
-
-template <>
-__device__ __forceinline__
-NaiveParams make_params<NaiveParams>()
-{
-    return make_naive_params();
-}
-
-template <>
-__device__ __forceinline__
-SlabParams make_params<SlabParams>()
-{
-    return make_slab_params();
-}
-
-template <>
-__device__ __forceinline__
-SwizzleParams make_params<SwizzleParams>()
-{
-    return make_swizzle_params();
-}
-
-
-template <>
-__device__ __forceinline__
-FakeSwizzleParams make_params<FakeSwizzleParams>()
-{
-    return make_fake_swizzle_params();
 }

@@ -5,7 +5,7 @@ rm -f .build/prof
 
 COMPILE_OUTPUT=$(nvcc -O3 -lineinfo -Xptxas -v \
   -I. \
-  -DSUBTILE_MN=128 -DSUBTILE_K=16 -DSUB=8 \
+  -DSUBTILE=32 -DSUBTILE_MN=64 -DSUBTILE_K=32 -DSUB=4 -DPADDING_GEN_DUM=0 -DPADDING=0 \
   profiling.cu kernels/*.cu \
   -o .build/prof 2>&1)
 
