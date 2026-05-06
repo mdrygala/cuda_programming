@@ -380,8 +380,8 @@ void printRooflineStats(double flops,
     const double efficiency = achieved_flops_s / peak_flops_s;
 
 // std::printf("Arithmetic intensity: %.2f FLOP/byte\n", arithmetic_intensity);
-std::printf("Compute roof:         %.2f TFLOP/s\n", peak_compute_tflops_s);
-std::printf("Memory roof:          %.2f TFLOP/s\n", peak_memory_tflops_s);
+// std::printf("Compute roof:         %.2f TFLOP/s\n", peak_compute_tflops_s);
+// std::printf("Memory roof:          %.2f TFLOP/s\n", peak_memory_tflops_s);
 std::printf("Achieved:             %.2f TFLOP/s\n", achieved_tflops_s);
 std::printf("Peak (roofline):      %.2f TFLOP/s\n", peak_roofline_tflops_s);
 std::printf("Efficiency:           %.2f%%\n", 100.0 * efficiency);

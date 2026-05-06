@@ -40,8 +40,18 @@
 
 
 //Tensor Core:
+
+#ifndef SUBTILE_TENSOR_CORE_MN
+#define SUBTILE_TENSOR_CORE_MN 64
+#endif
+
+
+#ifndef SUBTILE_TENSOR_CORE_K
+#define SUBTILE_TENSOR_CORE_K 16
+#endif
+
 #ifndef PADDING_TENSOR_CORE
-#define PADDING_TENSOR_CORE 16
+#define PADDING_TENSOR_CORE 8
 #endif
 
 #ifndef FRAGMENT_M

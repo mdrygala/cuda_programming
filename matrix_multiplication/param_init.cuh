@@ -75,7 +75,7 @@ struct SlabParamsGenDim {
     int slabColIdxB;
 };
 
-template <typename InputT>
+template <typename InputT, int SUBDIM_MN, int SUBDIM_K>
 __device__ __forceinline__
 SlabParamsGenDim make_linear_slab_params_gendim()
 { 
@@ -98,20 +98,20 @@ SlabParamsGenDim make_linear_slab_params_gendim()
     static_assert(VEC_BYTES % sizeof(InputT) == 0,
                   "InputT must divide 16 bytes");
 
-    static_assert(SUBTILE_K % VEC_ELEMS == 0,
-                  "SUBTILE_K must be divisible by VEC_ELEMS");
+    static_assert(SUBDIM_K % VEC_ELEMS == 0,
+                  "SUBDIM_K must be divisible by VEC_ELEMS");
 
-    static_assert(SUBTILE_MN % VEC_ELEMS == 0,
-                  "SUBTILE_MN must be divisible by VEC_ELEMS");
+    static_assert(SUBDIM_MN % VEC_ELEMS == 0,
+                  "SUBDIM_MN must be divisible by VEC_ELEMS");
 
-    constexpr int A_VEC_COLS = SUBTILE_K  / VEC_ELEMS;
-    constexpr int B_VEC_COLS = SUBTILE_MN / VEC_ELEMS;
+    constexpr int A_VEC_COLS = SUBDIM_K  / VEC_ELEMS;
+    constexpr int B_VEC_COLS = SUBDIM_MN / VEC_ELEMS;
 
     static_assert(WARP_SIZE % A_VEC_COLS == 0,
-                  "SUBTILE_K / VEC_ELEMS must divide 32");
+                  "SUBDIM_K / VEC_ELEMS must divide 32");
 
     static_assert(WARP_SIZE % B_VEC_COLS == 0,
-                  "SUBTILE_MN / VEC_ELEMS must divide 32");
+                  "SUBDIM_MN / VEC_ELEMS must divide 32");
 
     params.slabRowIdxA = laneId / A_VEC_COLS;
     params.slabColIdxA = laneId % A_VEC_COLS;

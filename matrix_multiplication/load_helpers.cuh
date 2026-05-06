@@ -177,13 +177,13 @@ void load_subtile_linear_slab(const InputT* __restrict__ A,
 
 }
 
-template <typename InputT, int NumWarps, int Padding>
+template <typename InputT, int NumWarps, int Padding, int SUBDIM_MN, int SUBDIM_K>
 __device__ __forceinline__
 void load_subtile_linear_slab_gendim(
     const InputT* __restrict__ A,
-    InputT ATile[SUBTILE_MN][SUBTILE_K + Padding],
+    InputT ATile[SUBDIM_MN][SUBDIM_K + Padding],
     const InputT* __restrict__ B,
-    InputT BTile[SUBTILE_K][SUBTILE_MN + Padding],
+    InputT BTile[SUBDIM_K][SUBDIM_MN + Padding],
     int M, int K, int N,
     int startRow, int startCol,
     int chunk,
@@ -193,8 +193,8 @@ void load_subtile_linear_slab_gendim(
     constexpr int VEC_ELEMS = VEC_BYTES / sizeof(InputT);
     constexpr int WARP_SIZE = 32;
 
-    constexpr int A_VEC_COLS = SUBTILE_K  / VEC_ELEMS;
-    constexpr int B_VEC_COLS = SUBTILE_MN / VEC_ELEMS;
+    constexpr int A_VEC_COLS = SUBDIM_K  / VEC_ELEMS;
+    constexpr int B_VEC_COLS = SUBDIM_MN / VEC_ELEMS;
 
     constexpr int A_SLAB_ROWS = WARP_SIZE / A_VEC_COLS;
     constexpr int B_SLAB_ROWS = WARP_SIZE / B_VEC_COLS;
@@ -202,7 +202,7 @@ void load_subtile_linear_slab_gendim(
   
 
     constexpr int TOTAL_SLABS =
-        (SUBTILE_MN * SUBTILE_K) / (WARP_SIZE * VEC_ELEMS);
+        (SUBDIM_MN * SUBDIM_K) / (WARP_SIZE * VEC_ELEMS);
 
     int threadRowGlobalOriginA = startRow;
     int threadColGlobalOriginA = chunk;
@@ -220,7 +220,7 @@ void load_subtile_linear_slab_gendim(
         int rowA = threadRowGlobalOriginA + rowTileA;
         int colA = threadColGlobalOriginA + colTileA;
 
-        if constexpr ((SUBTILE_K + PADDING_GEN_DIM) % VEC_ELEMS == 0){
+        if constexpr ((SUBDIM_K + PADDING_GEN_DIM) % VEC_ELEMS == 0){
             load_to_shared_pad_free<InputT>(
                 A,
                 rowA, colA, K,
@@ -244,7 +244,7 @@ void load_subtile_linear_slab_gendim(
 
         int rowB = threadRowGlobalOriginB + rowTileB;
         int colB = threadColGlobalOriginB + colTileB;
-        if constexpr ((SUBTILE_MN + PADDING_GEN_DIM) % VEC_ELEMS== 0){
+        if constexpr ((SUBDIM_MN + PADDING_GEN_DIM) % VEC_ELEMS== 0){
             load_to_shared_pad_free<InputT>(
             B,
             rowB, colB, N,

@@ -26,24 +26,24 @@ void GEMMTensorCores(int M, int N, int K,
                           float beta,
                           float* __restrict__ C)
 {   
-    static_assert(SUBTILE_K % FRAGMENT_K == 0);
+    static_assert(SUBTILE_TENSOR_CORE_K % FRAGMENT_K == 0);
     static_assert(WARP_TILE_M % FRAGMENT_M == 0);
     static_assert(WARP_TILE_N % FRAGMENT_N == 0);
-    static_assert(SUBTILE_MN % WARP_TILE_M == 0);
-    static_assert(SUBTILE_MN % WARP_TILE_N == 0);
+    static_assert(SUBTILE_TENSOR_CORE_MN % WARP_TILE_M == 0);
+    static_assert(SUBTILE_TENSOR_CORE_MN % WARP_TILE_N == 0);
     static_assert(NUM_WARPS_PER_BLOCK_TENSOR_CORE == NUM_WARPS_M * NUM_WARPS_N);
 
-    __shared__ __half ATile[SUBTILE_MN][SUBTILE_K + PADDING_TENSOR_CORE];
-    __shared__ __half BTile[SUBTILE_K][SUBTILE_MN + PADDING_TENSOR_CORE];
+    __shared__ __half ATile[SUBTILE_TENSOR_CORE_MN][SUBTILE_TENSOR_CORE_K + PADDING_TENSOR_CORE];
+    __shared__ __half BTile[SUBTILE_TENSOR_CORE_K][SUBTILE_TENSOR_CORE_MN + PADDING_TENSOR_CORE];
 
     wmma::fragment<wmma::matrix_a, FRAGMENT_M, FRAGMENT_N, FRAGMENT_K, __half, wmma::row_major> a_frag[WARP_M];
     wmma::fragment<wmma::matrix_b, FRAGMENT_M, FRAGMENT_N, FRAGMENT_K, __half, wmma::row_major> b_frag[WARP_N];
     wmma::fragment<wmma::accumulator, FRAGMENT_M, FRAGMENT_N, FRAGMENT_K, float> c_frag;
     wmma::fragment<wmma::accumulator, FRAGMENT_M, FRAGMENT_N, FRAGMENT_K, float> sum[WARP_M][WARP_N];
 
-    SlabParamsGenDim params = make_linear_slab_params_gendim<__half>();
-    int startRow = blockIdx.y * SUBTILE_MN;
-    int startCol = blockIdx.x * SUBTILE_MN;
+    SlabParamsGenDim params = make_linear_slab_params_gendim<__half, SUBTILE_TENSOR_CORE_MN, SUBTILE_TENSOR_CORE_K>();
+    int startRow = blockIdx.y * SUBTILE_TENSOR_CORE_MN;
+    int startCol = blockIdx.x * SUBTILE_TENSOR_CORE_MN;
 
     #pragma unroll
     for (int i = 0; i < WARP_M; i++) {
@@ -56,8 +56,8 @@ void GEMMTensorCores(int M, int N, int K,
     const int warpRow = params.warpId / NUM_WARPS_N;
     const int warpCol = params.warpId % NUM_WARPS_N;
 
-    for (int chunk = 0; chunk < K; chunk += SUBTILE_K) {
-        load_subtile_linear_slab_gendim<__half, NUM_WARPS_PER_BLOCK_TENSOR_CORE, PADDING_TENSOR_CORE>(
+    for (int chunk = 0; chunk < K; chunk += SUBTILE_TENSOR_CORE_K) {
+        load_subtile_linear_slab_gendim<__half, NUM_WARPS_PER_BLOCK_TENSOR_CORE, PADDING_TENSOR_CORE, SUBTILE_TENSOR_CORE_MN, SUBTILE_TENSOR_CORE_K>(
             A, ATile,
             B, BTile,
             M, K, N,
@@ -67,18 +67,18 @@ void GEMMTensorCores(int M, int N, int K,
         __syncthreads();
 
         //compute here
-        for (int wmma_chunk = 0; wmma_chunk < SUBTILE_K; wmma_chunk += FRAGMENT_K){
+        for (int wmma_chunk = 0; wmma_chunk < SUBTILE_TENSOR_CORE_K; wmma_chunk += FRAGMENT_K){
             #pragma unroll
             for (int i = 0; i < WARP_M; i++){
                 int rowTile = warpRow * WARP_TILE_M + FRAGMENT_M * i;
                 wmma::load_matrix_sync(a_frag[i], &ATile[rowTile][wmma_chunk] ,
-                                        SUBTILE_K + PADDING_TENSOR_CORE);
+                                        SUBTILE_TENSOR_CORE_K + PADDING_TENSOR_CORE);
             }
             #pragma unroll
             for (int j = 0; j < WARP_N; j++){
                 int colTile = warpCol * WARP_TILE_N + FRAGMENT_N * j;
                 wmma::load_matrix_sync(b_frag[j], &BTile[wmma_chunk][colTile],
-                                        SUBTILE_MN + PADDING_TENSOR_CORE);
+                                        SUBTILE_TENSOR_CORE_MN + PADDING_TENSOR_CORE);
             }
             
 
@@ -96,11 +96,11 @@ void GEMMTensorCores(int M, int N, int K,
     #pragma unroll
             for (int i = 0; i < WARP_M; i++){
                 int rowTile = warpRow * WARP_TILE_M + FRAGMENT_M * i;
-                int globalRow = blockIdx.y * SUBTILE_MN + rowTile;
+                int globalRow = blockIdx.y * SUBTILE_TENSOR_CORE_MN + rowTile;
                 #pragma unroll
                 for (int j = 0; j < WARP_N; j++){
                     int colTile = warpCol * WARP_TILE_N + FRAGMENT_N * j;
-                    int globalCol = blockIdx.x * SUBTILE_MN + colTile;
+                    int globalCol = blockIdx.x * SUBTILE_TENSOR_CORE_MN + colTile;
                     int globalIdx = globalRow * N + globalCol;
                     if (beta != 0.0f){
                         wmma::load_matrix_sync(c_frag, &C[globalIdx], N, wmma::mem_row_major);

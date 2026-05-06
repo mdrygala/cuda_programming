@@ -64,7 +64,7 @@ void GEMMSubTilingLoadSlabGenDims(int M, int N, int K,
     int startRow = blockIdx.y * SUBTILE_MN;
     int startCol = blockIdx.x * SUBTILE_MN;
 
-    SlabParamsGenDim params = make_linear_slab_params_gendim<InputT>();
+    SlabParamsGenDim params = make_linear_slab_params_gendim<InputT,  SUBTILE_MN, SUBTILE_K>();
 
     float sum[SUB][SUB];
     #pragma unroll
@@ -76,7 +76,7 @@ void GEMMSubTilingLoadSlabGenDims(int M, int N, int K,
     }
 
     for (int chunk = 0; chunk < K; chunk += SUBTILE_K) {
-        load_subtile_linear_slab_gendim<InputT, NUM_WARPS_PER_BLOCK, PADDING_GEN_DIM>(
+        load_subtile_linear_slab_gendim<InputT, NUM_WARPS_PER_BLOCK, PADDING_GEN_DIM, SUBTILE_MN, SUBTILE_K>(
             A, ATile,
             B, BTile,
             M, K, N,
