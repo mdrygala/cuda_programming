@@ -1,14 +1,17 @@
+#pragma once
 #include <cuda_runtime.h>
 #include <cstdio>
 #include "config.h"
-#include "kernels.cuh"
-#include "compute_helpers.cuh"
+#include "kernel_utils.cuh"
+// #include "compute_helpers.cuh"
+#include "store_helpers.cuh"
 
+template <typename InputT>
 __device__ __forceinline__
-void load_subtile_naive(const float* __restrict__ A,
-                        float ATile[SUBTILE][SUBTILE+1],
-                        const float* __restrict__ B,
-                        float BTile[SUBTILE][SUBTILE+1],
+void load_subtile_naive(const InputT* __restrict__ A,
+                        InputT ATile[SUBTILE][SUBTILE+PADDING],
+                        const InputT* __restrict__ B,
+                        InputT BTile[SUBTILE][SUBTILE+PADDING],
                         int M, int K, int N,
                         int startRow, int startCol, int chunk,
                         int threadRowTile, int threadColTile)
@@ -33,49 +36,57 @@ void load_subtile_naive(const float* __restrict__ A,
         
 
             //Loads into shared memory, in 
-            ATile[rowTile][colTile] = (rowA < M && colA < K) ? A[rowA * K + colA] : 0.0f;
-            BTile[rowTile][colTile] = (rowB < K && colB < N) ? B[rowB * N + colB] : 0.0f;
+            ATile[rowTile][colTile] = (rowA < M && colA < K) ? A[rowA * K + colA] : InputT(0);
+            BTile[rowTile][colTile] = (rowB < K && colB < N) ? B[rowB * N + colB] : InputT(0);
         }
     }
 }
 
 
-
+template <typename InputT>
 __device__ __forceinline__
-void store_subtile_scalar(float sum[SUB][SUB],
-                         float*  __restrict__ C, int M, int N, 
-                         int startRow, int startCol,
-                         int threadRowTile, int threadColTile,
-                        float alpha, float beta)
+void compute_subtile_temp(const InputT ATile[SUBTILE][SUBTILE+PADDING],
+                     const InputT BTile[SUBTILE][SUBTILE+PADDING],
+                     int K, int kmax,
+                     float sum[SUB][SUB], int threadRowTile, int threadColTile)
 {
-    int threadRowGlobalOrigin = startRow + threadRowTile;
-    int threadColGlobalOrigin = startCol + threadColTile;
+              
     #pragma unroll
-    for (int i = 0; i < SUB; i++){
-        int r = threadRowGlobalOrigin + i;
-        if (r >= M) break;
+    for (int k = 0; k < kmax; k++){
+        float AReg[SUB];
+        float BReg[SUB];
         #pragma unroll
-        for (int j = 0; j < SUB; j++){
-            int c = threadColGlobalOrigin + j;
-            if (c >= N) break;
-            int idx = r * N + c;
-            float cold = (beta != 0.0f) ? C[idx] : 0.0f;
-            C[idx] = alpha * sum[i][j] + beta * cold;
+        for (int i=0; i < SUB; i++){
+            AReg[i] = input_to_float_device<InputT>(ATile[threadRowTile + i][k]);
         }
+        #pragma unroll
+        for (int j=0; j < SUB; j++){
+            BReg[j] = input_to_float_device<InputT>(BTile[k][threadColTile + j]);
+        }
+
+        #pragma unroll
+        for (int i = 0; i < SUB; i++){
+            #pragma unroll
+            for (int j = 0; j < SUB; j++){
+                sum[i][j] = fmaf(AReg[i], BReg[j], sum[i][j]);
+            }
+
+        }
+
     }
 }
 
-
+template <typename InputT>
 __global__
 void GEMMSubTilingScalar(int M, int N, int K,
                           float alpha,
-                          const float* __restrict__ A,
-                          const float* __restrict__ B,
+                          const InputT* __restrict__ A,
+                          const InputT* __restrict__ B,
                           float beta,
                           float* __restrict__ C)
 {
-    __shared__ float ATile[SUBTILE][SUBTILE + 1];
-    __shared__ float BTile[SUBTILE][SUBTILE + 1];
+    __shared__ InputT ATile[SUBTILE][SUBTILE + PADDING];
+    __shared__ InputT BTile[SUBTILE][SUBTILE + PADDING];
 
     int startRow = blockIdx.y * SUBTILE;
     int startCol = blockIdx.x * SUBTILE;
@@ -93,7 +104,7 @@ void GEMMSubTilingScalar(int M, int N, int K,
     }
 
     for (int chunk = 0; chunk < K; chunk += SUBTILE) {
-        load_subtile_naive(
+        load_subtile_naive<InputT>(
             A, ATile,
             B, BTile,
             M, K, N,
@@ -103,7 +114,7 @@ void GEMMSubTilingScalar(int M, int N, int K,
         __syncthreads();
 
         int kmax = min(SUBTILE, K - chunk);
-        compute_subtile(
+        compute_subtile_temp<InputT>(
             ATile, BTile,
             K, kmax,
             sum,
@@ -119,6 +130,3 @@ void GEMMSubTilingScalar(int M, int N, int K,
         alpha, beta
     );
 }
-
-
-

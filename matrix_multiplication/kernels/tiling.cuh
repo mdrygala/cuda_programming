@@ -1,20 +1,18 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include "config.h"
-#include "kernels.cuh"
+#include "kernel_utils.cuh"
 
-
-
-// -------------------- Tiling --------------------
+template <typename InputT>
 __global__ void GEMMTiling(int M, int N, int K,
                            float alpha,
-                           const float* __restrict__ A,
-                           const float* __restrict__ B,
+                           const InputT* __restrict__ A,
+                           const InputT* __restrict__ B,
                            float beta,
                            float* __restrict__ C)
 {
-    __shared__ float ATile[TILE][TILE];
-    __shared__ float BTile[TILE][TILE];
+    __shared__ InputT ATile[TILE][TILE];
+    __shared__ InputT BTile[TILE][TILE];
 
     int startRow = blockIdx.y * TILE;
     int startCol = blockIdx.x * TILE;
@@ -32,17 +30,19 @@ __global__ void GEMMTiling(int M, int N, int K,
         int colB = threadColGlobal;
 
         ATile[threadIdx.y][threadIdx.x] =
-            (rowA < M && colA < K) ? A[rowA * K + colA] : 0.0f;
+            (rowA < M && colA < K) ? A[rowA * K + colA] : InputT(0);
 
         BTile[threadIdx.y][threadIdx.x] =
-            (rowB < K && colB < N) ? B[rowB * N + colB] : 0.0f;
+            (rowB < K && colB < N) ? B[rowB * N + colB] : InputT(0);
 
         __syncthreads();
 
         int kmax = min(TILE, K - chunk);
         #pragma unroll
         for (int k = 0; k < kmax; k++){
-            sum = fmaf(ATile[threadIdx.y][k], BTile[k][threadIdx.x], sum);
+            float a = input_to_float_device<InputT>(ATile[threadIdx.y][k]);
+            float b = input_to_float_device<InputT>(BTile[k][threadIdx.x]);
+            sum = fmaf(a, b, sum);
         }
         __syncthreads();
     }

@@ -1,13 +1,13 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 #include "config.h"
-#include "kernels.cuh"
+#include "kernel_utils.cuh"
 
-// -------------------- Baseline --------------------
+template <typename InputT>
 __global__ void GEMMBaseline(int M, int N, int K,
                              float alpha,
-                             const float* __restrict__ A,
-                             const float* __restrict__ B,
+                             const InputT* __restrict__ A,
+                             const InputT* __restrict__ B,
                              float beta,
                              float* __restrict__ C)
 {
@@ -17,7 +17,9 @@ __global__ void GEMMBaseline(int M, int N, int K,
 
     float sum = 0.0f;
     for (int k = 0; k < K; k++){
-        sum = fmaf(A[row * K + k], B[k * N + col], sum);
+        float a = input_to_float_device<InputT>(A[row * K + k]);
+        float b = input_to_float_device<InputT>(B[k * N + col]);
+        sum = fmaf(a, b, sum);
     }
 
     int idx = row * N + col;

@@ -56,7 +56,7 @@ void load_subtile_vec4_transposed(
         int rowB = threadRowGlobalOriginB + rowTileB;
         int colB = threadColGlobalOriginB + colTileB;
 
-        load_vec4_or_scalar_to_shared(
+        load_to_shared<float>(
             B,
             rowB, colB, N,
             K, N,

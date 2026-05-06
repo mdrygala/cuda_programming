@@ -36,9 +36,9 @@ void load_subtile_vec4(const float* __restrict__ A,
             int colB = threadColGlobalOriginB + colTile;
 
         
-            load_vec4_or_scalar_to_shared(A, rowA, colA, K,
+            load_to_shared<float>(A, rowA, colA, K,
                                    M, K, &ATile[rowTile][0], colTile);
-            load_vec4_or_scalar_to_shared(B, rowB, colB, N,
+            load_to_shared<float>(B, rowB, colB, N,
                                    K, N, &BTile[rowTile][0], colTile);
 
     

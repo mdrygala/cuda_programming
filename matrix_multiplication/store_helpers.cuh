@@ -2,7 +2,29 @@
 #include <cuda_runtime.h>
 #include "config.h"
 
-
+__device__ __forceinline__
+void store_subtile_scalar(float sum[SUB][SUB],
+                         float*  __restrict__ C, int M, int N, 
+                         int startRow, int startCol,
+                         int threadRowTile, int threadColTile,
+                        float alpha, float beta)
+{
+    int threadRowGlobalOrigin = startRow + threadRowTile;
+    int threadColGlobalOrigin = startCol + threadColTile;
+    #pragma unroll
+    for (int i = 0; i < SUB; i++){
+        int r = threadRowGlobalOrigin + i;
+        if (r >= M) break;
+        #pragma unroll
+        for (int j = 0; j < SUB; j++){
+            int c = threadColGlobalOrigin + j;
+            if (c >= N) break;
+            int idx = r * N + c;
+            float cold = (beta != 0.0f) ? C[idx] : 0.0f;
+            C[idx] = alpha * sum[i][j] + beta * cold;
+        }
+    }
+}
 
 __device__ __forceinline__
 void store_subtile_vec4(float sum[SUB][SUB],
