@@ -1,77 +1,78 @@
 #pragma once
 #include <cuda_runtime.h>
 #include <cstdio>
+
 #include "config.h"
 #include "kernel_utils.cuh"
 #include "param_init.cuh"
-#include "load_helpers.cuh"
-#include "compute_helpers.cuh"
-#include "store_helpers.cuh"
+#include "helpers/load_helpers.cuh"
+#include "helpers/compute_helpers.cuh"
+#include "helpers/store_helpers.cuh"
 
 
+// DATATYPE:   half
+// CONFIG:     datatype=half TILE_WARP_LOAD_M=64 TILE_WARP_LOAD_N=128 TILE_WARP_LOAD_K=16 THREAD_DIM_WARP_LOAD=8 PADDING_WARP_LOAD=0 THREADS=128
+// TFLOPS:     15.94
+// Efficiency: 81.78%
 
-//used for warp loader
-template <typename Params, typename InputT>
-__device__ __forceinline__
-void compute_subtile(const InputT ATile[SUBTILE][SUBTILE+PADDING_WARP],
-                     const InputT BTile[SUBTILE][SUBTILE+PADDING_WARP],
-                     int kmax,
-                     float sum[SUB][SUB], const Params& params)
-{
-              
-    #pragma unroll
-    for (int k = 0; k < kmax; k++){
-        float AReg[SUB];
-        float BReg[SUB];
-        #pragma unroll
-        for (int i=0; i < SUB; i++){
-            AReg[i] = input_to_float_device<InputT>(ATile[params.threadRowTile + i][k]);
-        }
-        #pragma unroll
-        for (int j=0; j < SUB; j++){
-            BReg[j] = input_to_float_device<InputT>(BTile[k][params.threadColTile + j]);
-        }
+#ifndef TILE_WARP_LOAD_M
+#define TILE_WARP_LOAD_M 64
+#endif
 
-        #pragma unroll
-        for (int i = 0; i < SUB; i++){
-            #pragma unroll
-            for (int j = 0; j < SUB; j++){
-                sum[i][j] = fmaf(AReg[i], BReg[j], sum[i][j]);
-            }
+#ifndef TILE_WARP_LOAD_N
+#define TILE_WARP_LOAD_N 64
+#endif
 
-        }
 
-    }
-}
+#ifndef TILE_WARP_LOAD_K
+#define TILE_WARP_LOAD_K 32
+#endif
+
+#ifndef PADDING_WARP_LOAD
+#define PADDING_WARP_LOAD 0
+#endif
+
+
+#ifndef THREAD_DIM_WARP_LOAD
+#define THREAD_DIM_WARP_LOAD 4
+#endif
+
+#define NUM_THREADS_WARP_LOAD_M (TILE_WARP_LOAD_M / THREAD_DIM_WARP_LOAD)
+#define NUM_THREADS_WARP_LOAD_N (TILE_WARP_LOAD_N / THREAD_DIM_WARP_LOAD)
+#define NUM_THREADS_PER_BLOCK_WARP_LOAD (NUM_THREADS_WARP_LOAD_M * NUM_THREADS_WARP_LOAD_N)
+#define NUM_WARPS_PER_BLOCK_WARP_LOAD (NUM_THREADS_PER_BLOCK_WARP_LOAD / 32)
 
 template <typename InputT>
 __global__
-void GEMMSubTilingLoadSlabLinear(int M, int N, int K,
+void GEMMSubTilingLoadSlabGenDims(int M, int N, int K,
                           float alpha,
                           const InputT* __restrict__ A,
                           const InputT* __restrict__ B,
                           float beta,
                           float* __restrict__ C)
 {
-    __shared__ InputT ATile[SUBTILE][SUBTILE + PADDING_WARP];
-    __shared__ InputT BTile[SUBTILE][SUBTILE + PADDING_WARP];
+    __shared__ InputT ATile[TILE_WARP_LOAD_M][TILE_WARP_LOAD_K + PADDING_WARP_LOAD];
+    __shared__ InputT BTile[TILE_WARP_LOAD_K][TILE_WARP_LOAD_N + PADDING_WARP_LOAD];
 
-    int startRow = blockIdx.y * SUBTILE;
-    int startCol = blockIdx.x * SUBTILE;
+    int startRow = blockIdx.y * TILE_WARP_LOAD_M;
+    int startCol = blockIdx.x * TILE_WARP_LOAD_N;
 
-    SlabParams params = make_linear_slab_params<InputT>();
+    int threadRowTile = threadIdx.y * THREAD_DIM_WARP_LOAD;
+    int threadColTile = threadIdx.x * THREAD_DIM_WARP_LOAD;
 
-    float sum[SUB][SUB];
+    SlabParamsGenDim params = make_linear_slab_params_gendim<InputT,  TILE_WARP_LOAD_M, TILE_WARP_LOAD_N, TILE_WARP_LOAD_K>();
+
+    float sum[THREAD_DIM_WARP_LOAD][THREAD_DIM_WARP_LOAD];
     #pragma unroll
-    for (int i = 0; i < SUB; i++) {
+    for (int i = 0; i < THREAD_DIM_WARP_LOAD; i++) {
         #pragma unroll
-        for (int j = 0; j < SUB; j++) {
+        for (int j = 0; j < THREAD_DIM_WARP_LOAD; j++) {
             sum[i][j] = 0.0f;
         }
     }
 
-    for (int chunk = 0; chunk < K; chunk += SUBTILE) {
-        load_subtile_linear_slab<InputT>(
+    for (int chunk = 0; chunk < K; chunk += TILE_WARP_LOAD_K) {
+        load_subtile_warp<InputT, NUM_WARPS_PER_BLOCK_WARP_LOAD, PADDING_WARP_LOAD, TILE_WARP_LOAD_M, TILE_WARP_LOAD_N, TILE_WARP_LOAD_K>(
             A, ATile,
             B, BTile,
             M, K, N,
@@ -80,20 +81,20 @@ void GEMMSubTilingLoadSlabLinear(int M, int N, int K,
         );
         __syncthreads();
 
-        int kmax = min(SUBTILE, K - chunk);
-        compute_subtile<SlabParams, InputT>(
+        int kmax = min(TILE_WARP_LOAD_K, K - chunk);
+        compute_subtile<InputT, TILE_WARP_LOAD_M, TILE_WARP_LOAD_N, TILE_WARP_LOAD_K, THREAD_DIM_WARP_LOAD, PADDING_WARP_LOAD>(
             ATile, BTile,
             kmax,
             sum,
-            params
+            threadRowTile, threadColTile
         );
         __syncthreads();
     }
 
-    store_subtile_vec4(
+    store_subtile_vec4<THREAD_DIM_WARP_LOAD>(
         sum, C, M, N,
         startRow, startCol,
-        params.threadRowTile, params.threadColTile,
+        threadRowTile, threadColTile,
         alpha, beta
     );
 }

@@ -2,69 +2,37 @@
 #include <cstdio>
 #include "config.h"
 #include "kernels.cuh"
-#include "load_helpers.cuh"
-#include "store_helpers.cuh"
+#include "helpers/load_helpers.cuh"
+#include "helpers/compute_helpers.cuh"
+#include "helpers/store_helpers.cuh"
+
+#ifndef TILE_REGISTER_VEC_TRANSPOSED_M
+#define TILE_REGISTER_VEC_TRANSPOSED_M 64
+#endif
+
+#ifndef TILE_REGISTER_VEC_TRANSPOSED_N
+#define TILE_REGISTER_VEC_TRANSPOSED_N 128
+#endif
 
 
-__device__ __forceinline__
-void load_subtile_vec4_transposed(
-    const float* __restrict__ A,
-    float ATileT[SUBTILE_K][SUBTILE_MN + 1],
-    const float* __restrict__ B,
-    float BTile[SUBTILE_K][SUBTILE_MN + 1],
-    int M, int K, int N,
-    int startRow, int startCol, int chunk,
-    int tid, int numThreads)
-{
-    constexpr int VEC = 4;
+#ifndef TILE_REGISTER_VEC_TRANSPOSED_K
+#define TILE_REGISTER_VEC_TRANSPOSED_K 16
+#endif
 
-    static_assert(SUBTILE_K  % VEC == 0, "SUBTILE_K must be divisible by 4");
-    static_assert(SUBTILE_MN % VEC == 0, "SUBTILE_MN must be divisible by 4");
+#ifndef PADDING_REGISTER_VEC_TRANSPOSED
+#define PADDING_REGISTER_VEC_TRANSPOSED 0
+#endif
 
-    constexpr int A_VEC_COLS = SUBTILE_K  / VEC;
-    constexpr int B_VEC_COLS = SUBTILE_MN / VEC;
+#ifndef THREAD_DIM_REGISTER_VEC_TRANSPOSED
+#define THREAD_DIM_REGISTER_VEC_TRANSPOSED 8
+#endif
 
-    constexpr int NUM_LOADS = SUBTILE_MN * SUBTILE_K / VEC;
 
-    int threadRowGlobalOriginA = startRow;
-    int threadColGlobalOriginA = chunk;
+#define NUM_THREADS_REGISTER_VEC_TRANSPOSED_M (TILE_REGISTER_VEC_TRANSPOSED_M / THREAD_DIM_REGISTER_VEC_TRANSPOSED)
+#define NUM_THREADS_REGISTER_VEC_TRANSPOSED_N (TILE_REGISTER_VEC_TRANSPOSED_N / THREAD_DIM_REGISTER_VEC_TRANSPOSED)
+#define NUM_THREADS_PER_BLOCK_REGISTER_VEC_TRANSPOSED (NUM_THREADS_REGISTER_VEC_TRANSPOSED_M * NUM_THREADS_REGISTER_VEC_TRANSPOSED_N)
+#define NUM_WARPS_PER_BLOCK_REGISTER_VEC_TRANSPOSED (NUM_THREADS_PER_BLOCK_REGISTER_VEC_TRANSPOSED / 32)
 
-    int threadRowGlobalOriginB = chunk;
-    int threadColGlobalOriginB = startCol;
-
-    for (int idx = tid; idx < NUM_LOADS; idx += numThreads) {
-        int rowTileA = idx / A_VEC_COLS;
-        int vecColA  = idx % A_VEC_COLS;
-        int colTileA = vecColA * VEC;
-
-        int rowA = threadRowGlobalOriginA + rowTileA;
-        int colA = threadColGlobalOriginA + colTileA;
-
-        load_vec4_or_scalar_to_shared_transposed(
-            A,
-            rowA, colA, K,
-            M, K,
-            &ATileT[0][0],
-            SUBTILE_MN + 1,
-            rowTileA,
-            colTileA
-        );
-        int rowTileB = idx / B_VEC_COLS;
-        int vecColB  = idx % B_VEC_COLS;
-        int colTileB = vecColB * VEC;
-
-        int rowB = threadRowGlobalOriginB + rowTileB;
-        int colB = threadColGlobalOriginB + colTileB;
-
-        load_to_shared<float>(
-            B,
-            rowB, colB, N,
-            K, N,
-            &BTile[rowTileB][0],
-            colTileB
-        );
-    }
-}
 
 
 
@@ -76,39 +44,47 @@ void GEMMSubTilingVec4Transposed(int M, int N, int K,
                           float beta,
                           float* __restrict__ C)
 {
-    __shared__ float ATileT[SUBTILE_K][SUBTILE_MN + 1];
-    __shared__ float BTile[SUBTILE_K][SUBTILE_MN + 1];
+    __shared__ float ATileT[TILE_REGISTER_VEC_TRANSPOSED_K]
+                           [TILE_REGISTER_VEC_TRANSPOSED_M + PADDING_REGISTER_VEC_TRANSPOSED];
+    __shared__ float BTile[TILE_REGISTER_VEC_TRANSPOSED_K]
+                          [TILE_REGISTER_VEC_TRANSPOSED_N + PADDING_REGISTER_VEC_TRANSPOSED];
 
-    int startRow = blockIdx.y * SUBTILE_MN;
-    int startCol = blockIdx.x * SUBTILE_MN;
+    int startRow = blockIdx.y * TILE_REGISTER_VEC_TRANSPOSED_M;
+    int startCol = blockIdx.x *TILE_REGISTER_VEC_TRANSPOSED_N;
 
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
-    int numThreads = blockDim.x * blockDim.y;
 
-    int threadRowTile = threadIdx.y * SUB;
-    int threadColTile = threadIdx.x * SUB;
+    int threadRowTile = threadIdx.y * THREAD_DIM_REGISTER_VEC_TRANSPOSED;
+    int threadColTile = threadIdx.x * THREAD_DIM_REGISTER_VEC_TRANSPOSED;
 
-    float sum[SUB][SUB];
+    float sum[THREAD_DIM_REGISTER_VEC_TRANSPOSED][THREAD_DIM_REGISTER_VEC_TRANSPOSED];
     #pragma unroll
-    for (int i = 0; i < SUB; i++) {
+    for (int i = 0; i < THREAD_DIM_REGISTER_VEC_TRANSPOSED; i++) {
         #pragma unroll
-        for (int j = 0; j < SUB; j++) {
+        for (int j = 0; j < THREAD_DIM_REGISTER_VEC_TRANSPOSED; j++) {
             sum[i][j] = 0.0f;
         }
     }
 
-    for (int chunk = 0; chunk < K; chunk += SUBTILE_K) {
-        load_subtile_vec4_transposed(
+    for (int chunk = 0; chunk < K; chunk += TILE_REGISTER_VEC_TRANSPOSED_K) {
+        load_subtile_linear_transposed<float, NUM_THREADS_PER_BLOCK_REGISTER_VEC_TRANSPOSED, PADDING_REGISTER_VEC_TRANSPOSED, TILE_REGISTER_VEC_TRANSPOSED_M, TILE_REGISTER_VEC_TRANSPOSED_N, TILE_REGISTER_VEC_TRANSPOSED_K>(
             A, ATileT,
             B, BTile,
             M, K, N,
             startRow, startCol,
-            chunk, tid, numThreads
+            chunk, tid
         );
         __syncthreads();
 
-        int kmax = min(SUBTILE_K, K - chunk);
-        compute_subtile_transposed(
+        int kmax = min(TILE_REGISTER_VEC_TRANSPOSED_K, K - chunk);
+        compute_subtile_transposed<
+            float,
+            TILE_REGISTER_VEC_TRANSPOSED_M,
+            TILE_REGISTER_VEC_TRANSPOSED_N,
+            TILE_REGISTER_VEC_TRANSPOSED_K,
+            THREAD_DIM_REGISTER_VEC_TRANSPOSED,
+            PADDING_REGISTER_VEC_TRANSPOSED
+        >(
             ATileT, BTile,
             kmax,
             sum,
@@ -117,7 +93,7 @@ void GEMMSubTilingVec4Transposed(int M, int N, int K,
         __syncthreads();
     }
 
-    store_subtile_vec4(
+    store_subtile_vec4<THREAD_DIM_REGISTER_VEC_TRANSPOSED>(
         sum, C, M, N,
         startRow, startCol,
         threadRowTile, threadColTile,

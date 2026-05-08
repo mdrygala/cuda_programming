@@ -1,7 +1,12 @@
+#pragma once
 #include <cuda_runtime.h>
 #include <cstdio>
 #include "config.h"
 #include "kernel_utils.cuh"
+
+#ifndef TILE
+#define TILE 32
+#endif
 
 template <typename InputT>
 __global__ void GEMMTiling(int M, int N, int K,

@@ -2,8 +2,9 @@
 #include <cuda_runtime.h>
 #include "config.h"
 
+template <int THREAD_DIM>
 __device__ __forceinline__
-void store_subtile_scalar(float sum[SUB][SUB],
+void store_subtile_scalar(float sum[THREAD_DIM][THREAD_DIM],
                          float*  __restrict__ C, int M, int N, 
                          int startRow, int startCol,
                          int threadRowTile, int threadColTile,
@@ -12,11 +13,11 @@ void store_subtile_scalar(float sum[SUB][SUB],
     int threadRowGlobalOrigin = startRow + threadRowTile;
     int threadColGlobalOrigin = startCol + threadColTile;
     #pragma unroll
-    for (int i = 0; i < SUB; i++){
+    for (int i = 0; i < THREAD_DIM; i++){
         int r = threadRowGlobalOrigin + i;
         if (r >= M) break;
         #pragma unroll
-        for (int j = 0; j < SUB; j++){
+        for (int j = 0; j < THREAD_DIM; j++){
             int c = threadColGlobalOrigin + j;
             if (c >= N) break;
             int idx = r * N + c;
@@ -26,8 +27,9 @@ void store_subtile_scalar(float sum[SUB][SUB],
     }
 }
 
+template <int THREAD_DIM>
 __device__ __forceinline__
-void store_subtile_vec4(float sum[SUB][SUB],
+void store_subtile_vec4(float sum[THREAD_DIM][THREAD_DIM],
                          float*  __restrict__ C, int M, int N, 
                          int startRow, int startCol,
                          int threadRowTile, int threadColTile,
@@ -39,7 +41,7 @@ void store_subtile_vec4(float sum[SUB][SUB],
     // Fast path when beta == 0: no read-modify-write needed
     if (beta == 0.0f) {
         #pragma unroll
-        for (int i = 0; i < SUB; i++) {
+        for (int i = 0; i < THREAD_DIM; i++) {
             int r = threadRowGlobalOrigin + i;
             if (r >= M) break;
 
@@ -47,7 +49,7 @@ void store_subtile_vec4(float sum[SUB][SUB],
 
             // vector part: j in steps of 4
             #pragma unroll
-            for (int j = 0; j + 3 < SUB; j += 4) {
+            for (int j = 0; j + 3 < THREAD_DIM; j += 4) {
                 int c = threadColGlobalOrigin + j;
                 if (c + 3 >= N) break;
 
@@ -71,7 +73,7 @@ void store_subtile_vec4(float sum[SUB][SUB],
 
             // tail (or if N bound cuts vector loop early)
             #pragma unroll
-            for (int j = (SUB & ~3); j < SUB; j++) {
+            for (int j = (THREAD_DIM & ~3); j < THREAD_DIM; j++) {
                 int c = threadColGlobalOrigin + j;
                 if (c >= N) break;
                 int idx = base + j;
@@ -83,14 +85,14 @@ void store_subtile_vec4(float sum[SUB][SUB],
 
     // General path beta != 0: need to read C (vectorize load+store when possible)
     #pragma unroll
-    for (int i = 0; i < SUB; i++) {
+    for (int i = 0; i < THREAD_DIM; i++) {
         int r = threadRowGlobalOrigin + i;
         if (r >= M) break;
 
         int base = r * N + threadColGlobalOrigin;
 
         #pragma unroll
-        for (int j = 0; j + 3 < SUB; j += 4) {
+        for (int j = 0; j + 3 < THREAD_DIM; j += 4) {
             int c = threadColGlobalOrigin + j;
             if (c + 3 >= N) break;
 
@@ -119,7 +121,7 @@ void store_subtile_vec4(float sum[SUB][SUB],
 
         // scalar tail
         #pragma unroll
-        for (int j = (SUB & ~3); j < SUB; j++) {
+        for (int j = (THREAD_DIM & ~3); j < THREAD_DIM; j++) {
             int c = threadColGlobalOrigin + j;
             if (c >= N) break;
             int idx = base + j;

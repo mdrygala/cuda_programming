@@ -3,15 +3,27 @@
 #include <cstdio>
 #include "config.h"
 #include "kernel_utils.cuh"
-// #include "compute_helpers.cuh"
-#include "store_helpers.cuh"
+#include "helpers/compute_helpers.cuh"
+#include "helpers/store_helpers.cuh"
+
+#ifndef TILE_REGISTER_SCALAR
+#define TILE_REGISTER_SCALAR 64
+#endif
+
+#ifndef THREAD_DIM_REGISTER_SCALAR
+#define THREAD_DIM_REGISTER_SCALAR 4
+#endif
+
+#ifndef PADDING_REGISTER_SCALAR
+#define PADDING_REGISTER_SCALAR 0
+#endif
 
 template <typename InputT>
 __device__ __forceinline__
 void load_subtile_naive(const InputT* __restrict__ A,
-                        InputT ATile[SUBTILE][SUBTILE+PADDING],
+                        InputT ATile[TILE_REGISTER_SCALAR][TILE_REGISTER_SCALAR+PADDING_REGISTER_SCALAR],
                         const InputT* __restrict__ B,
-                        InputT BTile[SUBTILE][SUBTILE+PADDING],
+                        InputT BTile[TILE_REGISTER_SCALAR][TILE_REGISTER_SCALAR+PADDING_REGISTER_SCALAR],
                         int M, int K, int N,
                         int startRow, int startCol, int chunk,
                         int threadRowTile, int threadColTile)
@@ -23,58 +35,25 @@ void load_subtile_naive(const InputT* __restrict__ A,
     int threadColGlobalOriginB = startCol;
 
     #pragma unroll
-    for (int i = 0; i < SUB; i++){
+    for (int i = 0; i < THREAD_DIM_REGISTER_SCALAR; i++){
         int rowTile = threadRowTile + i;
         int rowA = threadRowGlobalOriginA + rowTile;
         int rowB = threadRowGlobalOriginB + rowTile;
 
         #pragma unroll
-        for (int j = 0; j < SUB; j++){
+        for (int j = 0; j < THREAD_DIM_REGISTER_SCALAR; j++){
             int colTile = threadColTile + j;
             int colA = threadColGlobalOriginA + colTile;
             int colB = threadColGlobalOriginB + colTile;
         
 
-            //Loads into shared memory, in 
+            //Loads into shared memory,
             ATile[rowTile][colTile] = (rowA < M && colA < K) ? A[rowA * K + colA] : InputT(0);
             BTile[rowTile][colTile] = (rowB < K && colB < N) ? B[rowB * N + colB] : InputT(0);
         }
     }
 }
 
-
-template <typename InputT>
-__device__ __forceinline__
-void compute_subtile_temp(const InputT ATile[SUBTILE][SUBTILE+PADDING],
-                     const InputT BTile[SUBTILE][SUBTILE+PADDING],
-                     int K, int kmax,
-                     float sum[SUB][SUB], int threadRowTile, int threadColTile)
-{
-              
-    #pragma unroll
-    for (int k = 0; k < kmax; k++){
-        float AReg[SUB];
-        float BReg[SUB];
-        #pragma unroll
-        for (int i=0; i < SUB; i++){
-            AReg[i] = input_to_float_device<InputT>(ATile[threadRowTile + i][k]);
-        }
-        #pragma unroll
-        for (int j=0; j < SUB; j++){
-            BReg[j] = input_to_float_device<InputT>(BTile[k][threadColTile + j]);
-        }
-
-        #pragma unroll
-        for (int i = 0; i < SUB; i++){
-            #pragma unroll
-            for (int j = 0; j < SUB; j++){
-                sum[i][j] = fmaf(AReg[i], BReg[j], sum[i][j]);
-            }
-
-        }
-
-    }
-}
 
 template <typename InputT>
 __global__
@@ -85,25 +64,25 @@ void GEMMSubTilingScalar(int M, int N, int K,
                           float beta,
                           float* __restrict__ C)
 {
-    __shared__ InputT ATile[SUBTILE][SUBTILE + PADDING];
-    __shared__ InputT BTile[SUBTILE][SUBTILE + PADDING];
+    __shared__ InputT ATile[TILE_REGISTER_SCALAR][TILE_REGISTER_SCALAR + PADDING_REGISTER_SCALAR];
+    __shared__ InputT BTile[TILE_REGISTER_SCALAR][TILE_REGISTER_SCALAR + PADDING_REGISTER_SCALAR];
 
-    int startRow = blockIdx.y * SUBTILE;
-    int startCol = blockIdx.x * SUBTILE;
+    int startRow = blockIdx.y * TILE_REGISTER_SCALAR;
+    int startCol = blockIdx.x * TILE_REGISTER_SCALAR;
 
-    int threadRowTile = threadIdx.y * SUB;
-    int threadColTile = threadIdx.x * SUB;
+    int threadRowTile = threadIdx.y * THREAD_DIM_REGISTER_SCALAR;
+    int threadColTile = threadIdx.x * THREAD_DIM_REGISTER_SCALAR;
 
-    float sum[SUB][SUB];
+    float sum[THREAD_DIM_REGISTER_SCALAR][THREAD_DIM_REGISTER_SCALAR];
     #pragma unroll
-    for (int i = 0; i < SUB; i++) {
+    for (int i = 0; i < THREAD_DIM_REGISTER_SCALAR; i++) {
         #pragma unroll
-        for (int j = 0; j < SUB; j++) {
+        for (int j = 0; j < THREAD_DIM_REGISTER_SCALAR; j++) {
             sum[i][j] = 0.0f;
         }
     }
 
-    for (int chunk = 0; chunk < K; chunk += SUBTILE) {
+    for (int chunk = 0; chunk < K; chunk += TILE_REGISTER_SCALAR) {
         load_subtile_naive<InputT>(
             A, ATile,
             B, BTile,
@@ -113,17 +92,17 @@ void GEMMSubTilingScalar(int M, int N, int K,
         );
         __syncthreads();
 
-        int kmax = min(SUBTILE, K - chunk);
-        compute_subtile_temp<InputT>(
+        int kmax = min(TILE_REGISTER_SCALAR, K - chunk);
+        compute_subtile<InputT, TILE_REGISTER_SCALAR, TILE_REGISTER_SCALAR, TILE_REGISTER_SCALAR, THREAD_DIM_REGISTER_SCALAR, PADDING_REGISTER_SCALAR>(
             ATile, BTile,
-            K, kmax,
+            kmax,
             sum,
             threadRowTile, threadColTile
         );
         __syncthreads();
     }
 
-    store_subtile_scalar(
+    store_subtile_scalar<THREAD_DIM_REGISTER_SCALAR>(
         sum, C, M, N,
         startRow, startCol,
         threadRowTile, threadColTile,

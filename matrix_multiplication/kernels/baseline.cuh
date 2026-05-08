@@ -3,6 +3,10 @@
 #include "config.h"
 #include "kernel_utils.cuh"
 
+#ifndef BASELINE_TILE
+#define BASELINE_TILE 32
+#endif
+
 template <typename InputT>
 __global__ void GEMMBaseline(int M, int N, int K,
                              float alpha,
