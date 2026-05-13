@@ -10,10 +10,18 @@
 #include "helpers/store_helpers.cuh"
 
 
+// ================ BEST WARP LOAD CONFIGS ================
+
+// DATATYPE:   float
+// CONFIG:     datatype=float TILE_WARP_LOAD_M=64 TILE_WARP_LOAD_N=64 TILE_WARP_LOAD_K=64 THREAD_DIM_WARP_LOAD=4 PADDING_WARP_LOAD=0 THREADS=256
+// TFLOPS:     16.00
+// Efficiency: 82.11%
+
 // DATATYPE:   half
 // CONFIG:     datatype=half TILE_WARP_LOAD_M=64 TILE_WARP_LOAD_N=128 TILE_WARP_LOAD_K=16 THREAD_DIM_WARP_LOAD=8 PADDING_WARP_LOAD=0 THREADS=128
-// TFLOPS:     15.94
-// Efficiency: 81.78%
+// TFLOPS:     15.96
+// Efficiency: 81.90%
+// ========================================================
 
 #ifndef TILE_WARP_LOAD_M
 #define TILE_WARP_LOAD_M 64
@@ -25,7 +33,7 @@
 
 
 #ifndef TILE_WARP_LOAD_K
-#define TILE_WARP_LOAD_K 32
+#define TILE_WARP_LOAD_K 64
 #endif
 
 #ifndef PADDING_WARP_LOAD

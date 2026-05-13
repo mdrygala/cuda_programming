@@ -8,6 +8,19 @@
 #define TILE 32
 #endif
 
+// ================ BEST TILING CONFIGS ================
+
+// DATATYPE:   float
+// CONFIG:     datatype=float TILE=32 THREADS=1024
+// TFLOPS:     5.00
+// Efficiency: 25.64%
+
+// DATATYPE:   half
+// CONFIG:     datatype=half TILE=32 THREADS=1024
+// TFLOPS:     3.93
+// Efficiency: 20.16%
+// =====================================================
+
 template <typename InputT>
 __global__ void GEMMTiling(int M, int N, int K,
                            float alpha,

@@ -7,6 +7,19 @@
 #define BASELINE_TILE 32
 #endif
 
+// ================ BEST BASELINE CONFIGS ================
+
+// DATATYPE:   float
+// CONFIG:     datatype=float BASELINE_TILE=32 THREADS=1024
+// TFLOPS:     3.00
+// Efficiency: 15.41%
+
+// DATATYPE:   half
+// CONFIG:     datatype=half BASELINE_TILE=32 THREADS=1024
+// TFLOPS:     3.09
+// Efficiency: 15.84%
+// =======================================================
+
 template <typename InputT>
 __global__ void GEMMBaseline(int M, int N, int K,
                              float alpha,

@@ -18,6 +18,19 @@
 #define PADDING_REGISTER_SCALAR 0
 #endif
 
+// ================ BEST REGISTER SCALAR CONFIGS ================
+
+// DATATYPE:   float
+// CONFIG:     datatype=float TILE_REGISTER_SCALAR=64 THREAD_DIM_REGISTER_SCALAR=4 PADDING_REGISTER_SCALAR=0 THREADS=256
+// TFLOPS:     12.86
+// Efficiency: 65.98%
+
+// DATATYPE:   half
+// CONFIG:     datatype=half TILE_REGISTER_SCALAR=64 THREAD_DIM_REGISTER_SCALAR=4 PADDING_REGISTER_SCALAR=1 THREADS=256
+// TFLOPS:     14.20
+// Efficiency: 72.85%
+// ==============================================================
+
 template <typename InputT>
 __device__ __forceinline__
 void load_subtile_naive(const InputT* __restrict__ A,

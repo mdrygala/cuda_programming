@@ -6,6 +6,19 @@
 #include "helpers/compute_helpers.cuh"
 #include "helpers/store_helpers.cuh"
 
+// ================ BEST REGISTER VEC4 TRANSPOSED CONFIGS ================
+
+// DATATYPE:   float
+// CONFIG:     datatype=float TILE_REGISTER_VEC_TRANSPOSED_M=64 TILE_REGISTER_VEC_TRANSPOSED_N=128 TILE_REGISTER_VEC_TRANSPOSED_K=16 THREAD_DIM_REGISTER_VEC_TRANSPOSED=8 PADDING_REGISTER_VEC_TRANSPOSED=0 THREADS=128
+// TFLOPS:     16.29
+// Efficiency: 83.60%
+
+// DATATYPE:   half
+// CONFIG:     datatype=half TILE_REGISTER_VEC_TRANSPOSED_M=64 TILE_REGISTER_VEC_TRANSPOSED_N=128 TILE_REGISTER_VEC_TRANSPOSED_K=16 THREAD_DIM_REGISTER_VEC_TRANSPOSED=8 PADDING_REGISTER_VEC_TRANSPOSED=8 THREADS=128
+// TFLOPS:     17.43
+// Efficiency: 89.43%
+// =======================================================================
+
 #ifndef TILE_REGISTER_VEC_TRANSPOSED_M
 #define TILE_REGISTER_VEC_TRANSPOSED_M 64
 #endif
@@ -35,18 +48,18 @@
 
 
 
-
+template<typename InputT>
 __global__
 void GEMMSubTilingVec4Transposed(int M, int N, int K,
                           float alpha,
-                          const float* __restrict__ A,
-                          const float* __restrict__ B,
+                          const InputT* __restrict__ A,
+                          const InputT* __restrict__ B,
                           float beta,
                           float* __restrict__ C)
 {
-    __shared__ float ATileT[TILE_REGISTER_VEC_TRANSPOSED_K]
+    __shared__ InputT ATileT[TILE_REGISTER_VEC_TRANSPOSED_K]
                            [TILE_REGISTER_VEC_TRANSPOSED_M + PADDING_REGISTER_VEC_TRANSPOSED];
-    __shared__ float BTile[TILE_REGISTER_VEC_TRANSPOSED_K]
+    __shared__ InputT BTile[TILE_REGISTER_VEC_TRANSPOSED_K]
                           [TILE_REGISTER_VEC_TRANSPOSED_N + PADDING_REGISTER_VEC_TRANSPOSED];
 
     int startRow = blockIdx.y * TILE_REGISTER_VEC_TRANSPOSED_M;
@@ -67,7 +80,7 @@ void GEMMSubTilingVec4Transposed(int M, int N, int K,
     }
 
     for (int chunk = 0; chunk < K; chunk += TILE_REGISTER_VEC_TRANSPOSED_K) {
-        load_subtile_linear_transposed<float, NUM_THREADS_PER_BLOCK_REGISTER_VEC_TRANSPOSED, PADDING_REGISTER_VEC_TRANSPOSED, TILE_REGISTER_VEC_TRANSPOSED_M, TILE_REGISTER_VEC_TRANSPOSED_N, TILE_REGISTER_VEC_TRANSPOSED_K>(
+        load_subtile_linear_transposed<InputT, NUM_THREADS_PER_BLOCK_REGISTER_VEC_TRANSPOSED, PADDING_REGISTER_VEC_TRANSPOSED, TILE_REGISTER_VEC_TRANSPOSED_M, TILE_REGISTER_VEC_TRANSPOSED_N, TILE_REGISTER_VEC_TRANSPOSED_K>(
             A, ATileT,
             B, BTile,
             M, K, N,
@@ -78,7 +91,7 @@ void GEMMSubTilingVec4Transposed(int M, int N, int K,
 
         int kmax = min(TILE_REGISTER_VEC_TRANSPOSED_K, K - chunk);
         compute_subtile_transposed<
-            float,
+            InputT,
             TILE_REGISTER_VEC_TRANSPOSED_M,
             TILE_REGISTER_VEC_TRANSPOSED_N,
             TILE_REGISTER_VEC_TRANSPOSED_K,

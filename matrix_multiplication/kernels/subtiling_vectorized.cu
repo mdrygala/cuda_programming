@@ -19,6 +19,13 @@
 #endif
 
 
+// ================ BEST REGISTER VEC4 CONFIG ================
+// CONFIG:     TILE_REGISTER_VEC=64 THREAD_DIM_REGISTER_VEC=4 PADDING_REGISTER_VEC=0 THREADS=256
+// TFLOPS:     16.25
+// Efficiency: 83.35%
+// ===========================================================
+
+
 __device__ __forceinline__
 void load_subtile_vec4(const float* __restrict__ A,
                        float ATile[TILE_REGISTER_VEC][TILE_REGISTER_VEC+PADDING_REGISTER_VEC],
