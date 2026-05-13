@@ -7,16 +7,32 @@ mkdir -p ncu_reports
 
 NVCC=${NVCC:-nvcc}
 NCU=${NCU:-ncu}
+USE_SUDO_NCU=${USE_SUDO_NCU:-1}
 ARCH=${ARCH:-sm_80}
+
+# Profile only selected launches, not every kernel launch in your program.
+# Example: skip first 10 launches, profile only the next 1 launch.
+NCU_LAUNCH_SKIP=${NCU_LAUNCH_SKIP:-10}
+NCU_LAUNCH_COUNT=${NCU_LAUNCH_COUNT:-1}
+
+if [ "$USE_SUDO_NCU" -eq 1 ]; then
+  NCU_CMD="sudo $NCU"
+else
+  NCU_CMD="$NCU"
+fi
 
 COMMON_FLAGS="-O3 -arch=${ARCH} -lineinfo -Xptxas -v -I."
 
-# You can change this if you want a lighter or heavier Nsight Compute profile.
-NCU_FLAGS="--set full --force-overwrite"
+NCU_FLAGS="--set full --force-overwrite --launch-skip ${NCU_LAUNCH_SKIP} --launch-count ${NCU_LAUNCH_COUNT}"
 
 echo "=========================================================="
 echo "GENERATING NSIGHT COMPUTE REPORTS FOR SELECTED GEMM KERNELS"
 echo "=========================================================="
+echo "NVCC:             $NVCC"
+echo "NCU command:      $NCU_CMD"
+echo "ARCH:             $ARCH"
+echo "NCU launch skip:  $NCU_LAUNCH_SKIP"
+echo "NCU launch count: $NCU_LAUNCH_COUNT"
 echo ""
 
 compile_kernel() {
@@ -86,18 +102,18 @@ run_ncu_report() {
 
   echo "----------------------------------------------------------"
   echo "Profiling: $label"
-  echo "Command:   $NCU $NCU_FLAGS -o $report_path $exe --datatype $datatype"
+  echo "Command:   $NCU_CMD $NCU_FLAGS -o $report_path $exe --datatype $datatype"
   echo "Report:    ${report_path}.ncu-rep"
   echo "----------------------------------------------------------"
 
-  OUTPUT=$($NCU $NCU_FLAGS \
+  OUTPUT=$($NCU_CMD $NCU_FLAGS \
     -o "$report_path" \
     "$exe" --datatype "$datatype" 2>&1)
 
   RUN_STATUS=$?
 
   echo "$OUTPUT" | grep -iE \
-    "GFLOPS|TFLOPS|Kernel time|Time|Verification|Mismatch|CUDA error|Efficiency|Achieved|Unknown|Aborted|==PROF==|Profiling|Report" || true
+    "GFLOPS|TFLOPS|Kernel time|Time|Verification|Mismatch|CUDA error|Efficiency|Achieved|Unknown|Aborted|==PROF==|Profiling|Report|ERR_NVGPUCTRPERM|launch-skip|launch-count" || true
 
   if [ $RUN_STATUS -ne 0 ]; then
     echo "[!] Nsight Compute run failed for $label"
